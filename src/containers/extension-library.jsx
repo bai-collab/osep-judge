@@ -11,6 +11,7 @@ import extensionLibraryContent, {
     galleryMore
 } from '../lib/libraries/extensions/index.jsx';
 import extensionTags from '../lib/libraries/tw-extension-tags';
+import {getZhTwFromTranslations} from '../lib/tw-zh-tw-fallback';
 
 import LibraryComponent from '../components/library/library.jsx';
 import extensionIcon from '../components/action-menu/icon--sprite.svg';
@@ -33,10 +34,15 @@ const toLibraryItem = extension => {
     return extension;
 };
 
+const getGalleryTranslation = (translations, locale) => (
+    // osep-judge: 擴充功能庫幾乎沒有 zh-tw，缺的時候用 zh-cn 轉繁中
+    locale === 'zh-tw' ? getZhTwFromTranslations(translations) : translations[locale]
+);
+
 const translateGalleryItem = (extension, locale) => ({
     ...extension,
-    name: extension.nameTranslations[locale] || extension.name,
-    description: extension.descriptionTranslations[locale] || extension.description
+    name: getGalleryTranslation(extension.nameTranslations, locale) || extension.name,
+    description: getGalleryTranslation(extension.descriptionTranslations, locale) || extension.description
 });
 
 let cachedGallery = null;

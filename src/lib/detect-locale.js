@@ -23,18 +23,8 @@ const detectLocale = supportedLocales => {
         }
     } catch (e) { /* ignore */ }
 
-    let locale = 'en'; // default
-    let browserLocale = window.navigator.userLanguage || window.navigator.language;
-    browserLocale = browserLocale.toLowerCase();
-    // try to set locale from browserLocale
-    if (supportedLocales.includes(browserLocale)) {
-        locale = browserLocale;
-    } else {
-        browserLocale = browserLocale.split('-')[0];
-        if (supportedLocales.includes(browserLocale)) {
-            locale = browserLocale;
-        }
-    }
+    // osep-judge: 預設一律繁體中文，不跟瀏覽器語言；使用者仍可從語言選單或 ?locale= 切換
+    const locale = supportedLocales.includes('zh-tw') ? 'zh-tw' : 'en';
 
     const queryParams = queryString.parse(location.search);
     // Flatten potential arrays and remove falsy values
