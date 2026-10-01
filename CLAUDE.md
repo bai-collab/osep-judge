@@ -1,3 +1,5 @@
+本檔是給 AI 開發助手的內部開發筆記，含開發者本機路徑與歷程；一般使用者不需閱讀，請從 README.md 開始。
+
 # osep-judge｜Scratch介面程式解題平台
 
 從`osep-scratch-editor`（ESP8266 SmartRing硬體+LED模擬器教學平台，路徑`D:\yosep\osep-scratch-editor`

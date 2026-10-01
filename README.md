@@ -4,6 +4,13 @@ osep-judge 是一個以 Scratch 積木程式解題為主的教學平台，介面
 式解題平台（demo.csie.ntnu.edu.tw/ps）修改，供國小學生練習程式解題與縣市競
 賽準備使用。
 
+## 我該用哪一種？
+
+| 如果你的需要是…… | 請使用…… |
+| --- | --- |
+| 只要讓學生練題、評分 | **線上網站（GitHub Pages 靜態版）**：<https://bai-collab.github.io/osep-judge/>，不用安裝，但沒有 AI 導師與教師紀錄。 |
+| 要 AI 解題導師、學生紀錄、Google 試算表 | **本機安裝版**：照 [教師快速設定](TEACHER-SETUP.md) 在教師電腦本機安裝。 |
+
 ## 本機 AI 解題導師與教師記錄
 
 新增同頁浮動解題導師、相關積木高亮、學生提問／評分紀錄，以及教師查看與 Google 試算表同步。本機服務需啟動後才可使用；GitHub Pages 只有靜態編輯器，不能執行本機 API。
@@ -12,6 +19,7 @@ osep-judge 是一個以 Scratch 積木程式解題為主的教學平台，介面
 - **導師操作與限制**：[本機解題導師](LOCAL-TUTOR.md)。
 - **記錄與同步**：[學習記錄](LEARNING-RECORDS.md)。
 - **Google 腳本**：[Code.gs](scripts/tutor/sheets/Code.gs)。
+- **AI 金鑰來源**：[生生有Token－AI額度管理平臺介紹](https://www.sdc.org.tw/115-118/product/%E7%94%9F%E7%94%9F%E6%9C%89token-ai%E9%A1%8D%E5%BA%A6%E7%AE%A1%E7%90%86%E5%B9%B3%E8%87%BA/)，申請與設定方式見 [教師設定中的「AI 金鑰從哪裡來」](TEACHER-SETUP.md#ai-金鑰從哪裡來)。
 
 帳密與學生紀錄只放本機 `local-data/`，不隨 Git 提交；不要把這個資料夾複製給學生或上傳 GitHub。
 
