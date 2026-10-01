@@ -146,6 +146,7 @@ test('真正選單及已用種類進入模型，提示契約不套用標準偵�
     assert.deepEqual(forwarded.notUsedAvailable.map(b => b.opcode), ['sensing_askandwait']);
     assert.ok(recorded.input[0].content.includes('不是標準 Scratch 選單'));
     assert.ok(recorded.input[0].content.includes('並非題目必需'));
+    assert.ok(recorded.input[0].content.includes('guidance 與 question 只能用畫面上的積木文字'));
     assert.ok(!JSON.stringify(recorded).includes(harmlessKey));
 });
 
@@ -296,6 +297,94 @@ test('合法 Responses 回覆支援 BOM、分段及 JSON 圍欄，仍保留原�
     }
 });
 
+test('模型回覆不顯示畫布積木 id／opcode，但 relatedBlocks 仍正確', async () => {
+    const tutorContext = sanitizeContext({task: context.task,
+        blocks: [{id: 'vm-b6', opcode: 'looks_say'}], editor: {
+            availableStatus: 'complete', availableBlocks: [{opcode: 'looks_say', category: '外觀', label: '字串組合'}],
+            renderedBlocks: [{id: 'b6', opcode: 'looks_say', label: '字串組合'}]
+        }});
+    const result = await requestGuidance({apiKey: harmlessKey, context: tutorContext, question: '問題', history: [],
+        fetchImpl: async () => new Response(JSON.stringify({status: 'completed', output_text: JSON.stringify({
+            guidance: '先點選 b6「字串組合」積木，檢查 looks_say。',
+            question: '你能看見 b6「字串組合」嗎？', relatedBlocks: [{id: 'b6'}, {opcode: 'looks_say'}]
+        })}))});
+    assert.equal(result.guidance, '先點選「字串組合」積木，檢查。');
+    assert.equal(result.question, '你能看見「字串組合」嗎？');
+    assert.deepEqual(result.relatedBlocks, [
+        {kind: 'workspace', id: 'b6', opcode: 'looks_say', label: '字串組合'},
+        {kind: 'toolbox', opcode: 'looks_say', category: '外觀', label: '字串組合'}
+    ]);
+});
+
+test('清除積木識別碼不誤刪一般英文或單字母 id', async () => {
+    const tutorContext = sanitizeContext({task: context.task,
+        blocks: [{id: 'a', opcode: 'looks_say'}], editor: {
+            renderedBlocks: [{id: 'a', opcode: 'looks_say', label: '說'}]
+        }});
+    const result = await requestGuidance({apiKey: harmlessKey, context: tutorContext, question: '問題', history: [],
+        fetchImpl: async () => new Response(JSON.stringify({output_text: JSON.stringify({
+            guidance: '輸入 Hello, a，再檢查 looks_say。', question: '請輸入 Hello, a。', relatedBlocks: [{id: 'a'}]
+        })}))});
+    assert.equal(result.guidance, '輸入 Hello, a，再檢查。');
+    assert.equal(result.question, '請輸入 Hello, a。');
+    assert.deepEqual(result.relatedBlocks, [{kind: 'workspace', id: 'a', opcode: 'looks_say', label: '說'}]);
+});
+
+test('含特殊字元的積木 id 可安全清除並保留高亮目標', async () => {
+    const specialId = 'slot`|@1';
+    const tutorContext = sanitizeContext({task: context.task,
+        blocks: [{id: specialId, opcode: 'looks_say'}], editor: {
+            renderedBlocks: [{id: specialId, opcode: 'looks_say', label: '特殊積木'}]
+        }});
+    const result = await requestGuidance({apiKey: harmlessKey, context: tutorContext, question: '問題', history: [],
+        fetchImpl: async () => new Response(JSON.stringify({output_text: JSON.stringify({
+            guidance: `請查看 ${specialId}「特殊積木」與 looks_say。`, question: `再確認 ${specialId}。`,
+            relatedBlocks: [{id: specialId}]
+        })}))});
+    assert.equal(result.guidance, '請查看「特殊積木」與。');
+    assert.equal(result.question, '再確認。');
+    assert.deepEqual(result.relatedBlocks, [{kind: 'workspace', id: specialId, opcode: 'looks_say', label: '特殊積木'}]);
+});
+
+test('含識別碼的 guidance 保留換行與原本的 CRLF', async () => {
+    const tutorContext = sanitizeContext({task: context.task,
+        blocks: [{id: 'vm-b6', opcode: 'looks_say'}], editor: {
+            renderedBlocks: [{id: 'b6', opcode: 'looks_say', label: '字串組合'}]
+        }});
+    for (const [lineBreak, expectedLineBreak] of [['\n', '\n'], ['\r\n', '\r\n']]) {
+        const result = await requestGuidance({apiKey: harmlessKey, context: tutorContext, question: '問題', history: [],
+            fetchImpl: async () => new Response(JSON.stringify({output_text: JSON.stringify({
+                guidance: `第一步：拖入積木${lineBreak}b6${lineBreak}第二步：檢查「Hello, 」`,
+                question: '請繼續操作', relatedBlocks: [{id: 'b6'}]
+            })}))});
+        assert.equal(result.guidance, `第一步：拖入積木${expectedLineBreak}第二步：檢查「Hello, 」`);
+    }
+});
+
+test('含識別碼時依標點與一般空白清除，不產生多餘空格', async () => {
+    const tutorContext = sanitizeContext({task: context.task,
+        blocks: [{id: 'b6', opcode: 'looks_say'}], editor: {
+            renderedBlocks: [{id: 'b6', opcode: 'looks_say', label: '字串組合'}]
+        }});
+    const result = await requestGuidance({apiKey: harmlessKey, context: tutorContext, question: '問題', history: [],
+        fetchImpl: async () => new Response(JSON.stringify({output_text: JSON.stringify({
+            guidance: '先點選 b6「字串組合」；使用 looks_say 積木',
+            question: '請檢查 b6。', relatedBlocks: [{id: 'b6'}]
+        })}))});
+    assert.equal(result.guidance, '先點選「字串組合」；使用 積木');
+    assert.ok(!result.guidance.includes('  '));
+    assert.equal(result.question, '請檢查。');
+});
+
+test('識別碼清除後的空 guidance 仍拒絕為 INVALID_MODEL_OUTPUT', async () => {
+    const tutorContext = sanitizeContext({task: context.task,
+        blocks: [{id: 'b6', opcode: 'looks_say'}], editor: {renderedBlocks: [{id: 'b6', opcode: 'looks_say'}]}});
+    await assert.rejects(requestGuidance({apiKey: harmlessKey, context: tutorContext, question: '問題', history: [],
+        fetchImpl: async () => new Response(JSON.stringify({output_text: JSON.stringify({
+            guidance: 'b6', question: '還有問題嗎？', relatedBlocks: [{id: 'b6'}]
+        })}))}), error => error.code === 'INVALID_MODEL_OUTPUT');
+});
+
 test('HTTP 上游狀態只回數字與白名單代碼，不回傳原始錯誤', async t => {
     for (const [status, code] of [[401, 'AUTH_REJECTED'], [403, 'AUTH_REJECTED'], [429, 'RATE_LIMITED'], [500, 'PROVIDER_ERROR']]) {
         const {post} = await serverFor(t, {fetchImpl: async () => new Response(harmlessKey, {status})});
@@ -318,4 +407,20 @@ test('只提供 build 內檔案，API 不接受 GET', async t => {
     assert.equal((await fetch(base + '/%2e%2e%2fpackage.json')).status, 404);
     assert.equal((await fetch(base + '/%5c..%5cpackage.json')).status, 404);
     assert.equal((await fetch(base + '/api/tutor')).status, 405);
+});
+
+test('沒有識別碼時保留引號內 Hello, 後的空白', async () => {
+    const result = await requestGuidance({apiKey: harmlessKey, context, question: '問題', history: [],
+        fetchImpl: async () => new Response(JSON.stringify({output_text: JSON.stringify({
+            guidance: '檢查第一個欄位是否是「Hello, 」', question: '逗號後面有保留空白嗎？', relatedBlocks: []
+        })}))});
+    assert.equal(result.guidance, '檢查第一個欄位是否是「Hello, 」');
+});
+
+test('沒有識別碼時保留 question 的換行', async () => {
+    const result = await requestGuidance({apiKey: harmlessKey, context, question: '問題', history: [],
+        fetchImpl: async () => new Response(JSON.stringify({output_text: JSON.stringify({
+            guidance: '先觀察結果', question: '第一行\n第二行', relatedBlocks: []
+        })}))});
+    assert.equal(result.question, '第一行\n第二行');
 });

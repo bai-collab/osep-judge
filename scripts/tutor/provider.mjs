@@ -14,6 +14,7 @@ blocks 是跨角色結構；editor.renderedBlocks 是當前画布文字（含輸
 blockTypes 是全專案種類統計，notUsedAvailable 只是可用但未用的種類，並非題目必需／學生缺漏。快照可能省略細節，資料缺失時問學生確認，不說沒放或一定缺少。
 availableStatus=unavailable 或 partial 時不可把未列出的分類／積木判為不存在。沒有文字名稱時請描述用途並問學生，不編造畫面字樣。每輪以最新快照為準。
 relatedBlocks 是本輪提示直接相關的最多三個積木。已放在當前畫布時用 editor.renderedBlocks 的 id；找選單積木時用 editor.availableBlocks 的 opcode。只能引用實際快照，不提供選擇器、HTML、程式碼或樣式。不確定或提示無關積木時給空陣列；不要把未用積木說成必需。
+guidance 與 question 只能用畫面上的積木文字或分類名稱稱呼積木，絕不寫出 id、opcode 或其他識別碼；id／opcode 只放在 relatedBlocks。
 只輸出 JSON：{"guidance":"一句下一步操作","question":"一句追問","relatedBlocks":[{"id":"當前畫布的實際識別碼"},{"opcode":"實際選單種類"}]}，不要 Markdown 或其他欄位。`;
 
 const text = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
@@ -114,6 +115,42 @@ const parseObject = (raw, code) => {
     return value;
 };
 
+const escapeRegExp = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const tutorPunctuation = '\u300c\u300e\u300d\u300f\u3010\u3011\u300a\u300b\u3008\u3009\u3014\u3015\uff3b\uff3d\uff08\uff09\uff5b\uff5d\uff0c\u3002\uff01\uff1f\uff1a\uff1b\u3001';
+const collectTutorBlockTerms = context => {
+    const editor = context?.editor || {};
+    const blocks = Array.isArray(context?.blocks) ? context.blocks : [];
+    const renderedBlocks = Array.isArray(editor.renderedBlocks) ? editor.renderedBlocks : [];
+    const blockTypes = Array.isArray(context?.blockTypes) ? context.blockTypes : [];
+    const availableBlocks = Array.isArray(editor.availableBlocks) ? editor.availableBlocks : [];
+    const notUsedAvailable = Array.isArray(context?.notUsedAvailable) ? context.notUsedAvailable : [];
+    const allOpcodeSources = [...blocks, ...blockTypes, ...renderedBlocks, ...availableBlocks, ...notUsedAvailable];
+    const opcodes = new Set(allOpcodeSources.filter(block => typeof block?.opcode === 'string' && block.opcode)
+        .map(block => block.opcode));
+    const ids = new Set([...blocks, ...renderedBlocks]
+        .filter(block => typeof block?.id === 'string' && block.id.length >= 2 && !/^[A-Za-z]+$/.test(block.id))
+        .map(block => block.id));
+    return [...new Set([...opcodes, ...ids])].sort((a, b) => b.length - a.length);
+};
+const cleanTutorText = (value, context) => {
+    let clean = value;
+    const marker = '\uE000';
+    let removed = false;
+    for (const term of collectTutorBlockTerms(context)) {
+        clean = clean.replace(new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(term)}(?![A-Za-z0-9_])`, 'g'), () => {
+            removed = true;
+            return marker;
+        });
+    }
+    if (!removed) return value.trim();
+    clean = clean.replace(new RegExp(`\\s*${marker}\\s*(?=[${tutorPunctuation}])`, 'gu'), '')
+        .replace(new RegExp(`(?<=[${tutorPunctuation}])\\s*${marker}\\s*`, 'gu'), '')
+        .replace(new RegExp(`\\s*${marker}\\s*`, 'gu'), match => match.includes('\r\n') ? '\r\n' :
+            match.includes('\n') || match.includes('\r') ? '\n' :
+                match.includes(' ') || match.includes('\t') ? ' ' : '');
+    return clean.trim();
+};
+
 export async function requestGuidance({apiKey, context, question, history, signal, fetchImpl = fetch}) {
     let response;
     try { response = await fetchImpl(ENDPOINT, {
@@ -163,11 +200,13 @@ export async function requestGuidance({apiKey, context, question, history, signa
     const clean = output.trim().replace(/^```json\s*/i, '').replace(/\s*```$/, '');
     const result = parseObject(clean, 'INVALID_MODEL_OUTPUT');
     if (!result || typeof result.guidance !== 'string' || typeof result.question !== 'string' ||
-        !result.guidance.trim() || !result.question.trim() ||
         result.guidance.length > 2000 || result.question.length > 2000) throw providerError('INVALID_MODEL_OUTPUT');
     // 即使上游意外回顯權杖，也不可交付前端或寫入對話。
     if (result.guidance.includes(apiKey) || result.question.includes(apiKey)) throw providerError('INVALID_MODEL_OUTPUT');
+    const guidance = cleanTutorText(result.guidance, context);
+    const cleanedQuestion = cleanTutorText(result.question, context);
+    if (!guidance || !cleanedQuestion) throw providerError('INVALID_MODEL_OUTPUT');
     const relatedBlocks = groundRelatedBlocks(result.relatedBlocks, context.editor);
     if (JSON.stringify(relatedBlocks).includes(apiKey)) throw providerError('INVALID_MODEL_OUTPUT');
-    return {guidance: result.guidance.trim(), question: result.question.trim(), relatedBlocks};
+    return {guidance, question: cleanedQuestion, relatedBlocks};
 }
