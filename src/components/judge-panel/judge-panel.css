@@ -5,6 +5,7 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
     background-color: $ui-white;
     border: 1px solid $ui-black-transparent;
     border-radius: $form-radius;
@@ -54,14 +55,16 @@
     flex-grow: 1;
     min-width: 0;
     height: 100%;
+    min-height: 0;
     padding-left: $space;
     padding-right: $space;
     padding-top: $space;
     box-sizing: border-box;
-    overflow-y: auto;
+    overflow: hidden;
 }
 
 .header {
+    flex-shrink: 0;
     padding: $space;
     background-color: $looks-secondary;
     color: $ui-white;
@@ -90,6 +93,20 @@
     font-weight: normal;
     white-space: nowrap;
 }
+.record-controls {padding: 12px; margin: 8px; border: 2px solid; border-radius: 8px; font-size: 14px; flex-shrink: 0;}
+.record-required {background: #fff4dc; border-color: #b35a00; color: #653300;}
+.record-ready {background: #eef8f1; border-color: #297447; color: #17492c;}
+.record-controls p {margin: 0 0 8px; overflow-wrap: anywhere;}
+.record-controls strong {font-size: 16px;}
+.record-controls span {display: block; margin-top: 4px; font-weight: bold;}
+.record-controls input {display: block; box-sizing: border-box; width: 100%; min-height: 44px; margin: 6px 0; padding: 8px; border: 2px solid #79512b; border-radius: 4px; background: white; color: #222; font-size: 16px;}
+.record-controls input:focus {outline: 3px solid #3578df; outline-offset: 2px;}
+.record-controls button {min-height: 44px; padding: 6px 12px; border: 1px solid #297447; border-radius: 4px; background: white; cursor: pointer; color: #17492c; font-size: 14px;}
+.record-controls button:disabled {cursor: default; opacity: 0.5;}
+.record-compact {display: flex; align-items: center; justify-content: space-between; gap: 8px;}
+.record-compact strong {min-width: 0; overflow-wrap: anywhere;}
+.record-compact button {flex-shrink: 0;}
+.record-notice {font-size: 12px; margin: 4px 8px;}
 
 .header-right {
     display: flex;
@@ -120,12 +137,16 @@
 }
 
 .tab-bar {
+    flex-shrink: 0;
     display: flex;
+    flex-wrap: wrap;
     border-bottom: 1px solid $ui-black-transparent;
 }
 
 .tab-button {
     flex: 1;
+    min-width: 70px;
+    min-height: 40px;
     padding: $space;
     border: none;
     background: $ui-tertiary;

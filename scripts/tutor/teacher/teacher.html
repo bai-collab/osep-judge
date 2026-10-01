@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>教師學習記錄</title><link rel="stylesheet" href="/teacher.css"></head>
+<body><main><header><h1>教師學習記錄</h1><a href="/editor.html?turbo">回學生編輯器</a></header>
+<p>依學生代號與題目查看分數、提交程式及導師對話。代號是學生自填，本機評分未驗證身分，供教學觀察使用。</p>
+<p>教師先在這台電腦完成設定，再交給學生。服務金鑰存於本機後端，學生頁不會取得；能控制電腦或讀取檔案的人仍可能取出金鑰。</p>
+<p id="connection-status" role="status">確認教師設定中…</p>
+<details id="setup-panel" hidden><summary>教師連線設定</summary>
+<p>第一次請設定至少12字的教師密碼。已設定後，留白代表保留原值；不會讀回既有密鑰。</p>
+<form id="settings-form">
+<label for="settings-password">教師密碼（首次必填；之後留白保留）</label><input id="settings-password" type="password" autocomplete="new-password" maxlength="256">
+<label for="settings-ai">NMKING AI 金鑰（可先留白）</label><input id="settings-ai" type="password" autocomplete="off" maxlength="512">
+<label><input id="clear-ai" type="checkbox">清除已保存的 AI 金鑰</label>
+<label for="settings-url">Google Apps Script /exec 網址（可先留白）</label><input id="settings-url" type="url" autocomplete="off">
+<label for="settings-token">試算表 RECORD_TOKEN（網址與密鑰須一起設定）</label><input id="settings-token" type="password" autocomplete="off" maxlength="200">
+<label><input id="clear-sheet" type="checkbox">停用並清除試算表連線</label>
+<button id="save-settings">保存到這台電腦</button><p id="settings-result" role="status"></p>
+</form></details>
+<button id="logout" hidden>登出教師頁</button>
+<div class="toolbar"><button id="refresh">更新本機紀錄</button><button id="sync">同步 Google 試算表</button>
+<label><input id="auto-refresh" type="checkbox" checked> 每 10 秒更新本機</label></div>
+<p id="status" role="status">讀取中…</p><p id="error" role="alert" hidden></p>
+<form id="login" hidden><label for="teacher-password">教師密碼</label>
+<input id="teacher-password" type="password" autocomplete="current-password" required><button>登入教師頁</button></form>
+<p>最新成績採最後一次成功評分；範例程式、評分失敗或評分期間程式變更不納入。保留原分數與滿分，不改評分規則。</p>
+<div class="filters"><label>學生代號 <select id="student"><option value="">全部學生</option></select></label>
+<label>題目 <select id="task"><option value="">全部題目</option></select></label></div>
+<h2>目前各題成績</h2><div id="summary" class="cards"></div>
+<h2>歷次紀錄</h2><p>按一筆紀錄可查看當時的程式。程式以積木結構 JSON 保存，不包含造型、音效與執行後變數值。</p>
+<div id="records"></div><button id="more" hidden>顯示更多紀錄</button></main>
+<script type="module" src="/teacher.js"></script></body></html>

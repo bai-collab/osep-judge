@@ -1,11 +1,16 @@
-import React, {useState, useEffect, useRef} from 'react';
+import React, {useState, useEffect, useRef, useCallback} from 'react';
 import PropTypes from 'prop-types';
 import VM from 'scratch-vm';
 import {gradeSubmission, prepareVmForGrading} from '../../lib/tw-judge-engine.js';
 import {scaffoldUrlForCourse} from '../../lib/scaffold-content.js';
 import judgeManualRun from '../../lib/judge-manual-run.js';
 import TaskList, {CourseTaskList} from './task-list.jsx';
+import TutorTab from './tutor-tab.jsx';
+import FloatingTutor from './floating-tutor.jsx';
+import {useTutorConnection} from '../../lib/tutor-connection.js';
 import styles from './judge-panel.css';
+import {useStudentIdentity, validStudentId, newRecordId, safeProgram,
+    recordingText, postGradeRecord} from '../../lib/learning-records.js';
 
 /**
  * MVP-33後續：題目面板，仿官方平台(demo.csie.ntnu.edu.tw/ps)的
@@ -351,6 +356,9 @@ const JudgePanel = ({vm}) => {
     // 而不是每次都砍回最上層的全部課程列表（見下面handleBackFromTask）。
     const [viewingCourseCode, setViewingCourseCode] = useState(null);
     const [activeTab, setActiveTab] = useState('description');
+    const [tutorOpen, setTutorOpen] = useState(false);
+    const [tutorMinimized, setTutorMinimized] = useState(false);
+    const tutorOpenerRef = useRef(null);
     const [grading, setGrading] = useState({
         isRunning: false,
         totalScore: null,
@@ -362,9 +370,31 @@ const JudgePanel = ({vm}) => {
     const [demoLoaded, setDemoLoaded] = useState(false);
     const [history, setHistory] = useState([]);
     const [visitCount, setVisitCount] = useState(null);
+    const {studentId, setStudentId} = useStudentIdentity();
+    const [studentCodeEditing, setStudentCodeEditing] = useState(() => !validStudentId(studentId));
+    const handleConfirmStudentCode = useCallback(() => setStudentCodeEditing(false), []);
+    const handleEditStudentCode = useCallback(() => setStudentCodeEditing(true), []);
+    const handleStudentCode = useCallback(event => setStudentId(event.target.value.trim()), [setStudentId]);
+    const [recordStatus, setRecordStatus] = useState('');
+    const gradingRunRef = useRef(false);
     const [judgeContent, setJudgeContent] = useState(null);
     const [taskDetail, setTaskDetail] = useState(null);
     const [taskLoading, setTaskLoading] = useState(false);
+    // 連線獨立留在本頁記憶體，面板重建、更新積木不會清除。
+    const {apiKey: tutorApiKey, mode: tutorMode,
+        setApiKey: handleTutorKeyChange, setMode: handleTutorModeChange} = useTutorConnection();
+    const handleTutorOpen = useCallback(() => {
+        setTutorOpen(true);
+        setTutorMinimized(false);
+    }, []);
+    const handleTutorMinimize = useCallback(() => {
+        setTutorMinimized(true);
+    }, []);
+    const handleTutorClose = useCallback(() => {
+        setTutorOpen(false);
+        setTutorMinimized(false);
+        if (tutorOpenerRef.current) tutorOpenerRef.current.focus();
+    }, []);
 
     // judge-content/是課程資料模組（跟平台程式碼本身無關），改成動態載入讓webpack把它切成
     // 獨立chunk：上架新題目只讓對應課程檔案的雜湊變、平台UI改動只讓主程式碼的雜湊變，兩者
@@ -420,13 +450,15 @@ const JudgePanel = ({vm}) => {
         };
     }, []);
 
-    const task = taskDetail ? taskDetail.task : null;
+    const task = taskDetail && taskDetail.task.code === selectedTaskCode ? taskDetail.task : null;
     const scaffoldUrl = taskDetail ? scaffoldUrlForCourse(taskDetail.course.code) : null;
 
     useEffect(() => {
         if (task) {
             setHistory(loadHistory(task.code));
             setActiveTab('description');
+            setTutorOpen(false);
+            setTutorMinimized(false);
             setGrading({isRunning: false, totalScore: null, maxScore: null, results: null, error: null});
             setDemoStatus(null);
             // 安全性修正（2026-09-05）：這裡以前會把demoLoaded重設為false，但切換題目並不會清空
@@ -437,7 +469,7 @@ const JudgePanel = ({vm}) => {
             // 「目前選哪一題」連動。
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedTaskCode]);
+    }, [task]);
 
     const handleBackFromTask = () => {
         setViewingCourseCode(taskDetail?.course?.code || null);
@@ -461,13 +493,56 @@ const JudgePanel = ({vm}) => {
     };
 
     const handleRunGrading = async () => {
-        setGrading({isRunning: true, totalScore: null, maxScore: null, results: null, error: null});
+        if (gradingRunRef.current) return;
+        gradingRunRef.current = true;
+        const currentTask = task;
+        const currentDemo = demoLoaded;
+        let record;
+        if (validStudentId(studentId)) {
+            try {
+                const candidate = {
+                    id: newRecordId(),
+                    studentId,
+                    type: 'grade',
+                    task: {code: task.code, title: task.title},
+                    program: safeProgram(vm, tutorApiKey),
+                    demoLoaded: currentDemo
+                };
+                if (tutorApiKey && JSON.stringify(candidate).includes(tutorApiKey)) {
+                    throw new Error('記錄文字含有 API 金鑰；本次不保存紀錄。');
+                }
+                record = candidate;
+            } catch (err) {
+                setRecordStatus(err.message);
+            }
+        } else setRecordStatus(recordingText(null));
+        setGrading({
+            isRunning: true,
+            totalScore: null,
+            maxScore: null,
+            results: null,
+            error: null,
+            taskCode: task.code
+        });
         try {
             const {totalScore, maxScore, results} = await withVisibilityRestore(
-                vm, () => gradeSubmission(vm, task.testCases)
+                vm, () => gradeSubmission(vm, currentTask.testCases)
             );
-            setGrading({isRunning: false, totalScore, maxScore, results, error: null});
+            setGrading({isRunning: false, totalScore, maxScore, results, error: null, taskCode: task.code});
             setHistory(saveHistoryEntry(task.code, {totalScore, maxScore, timestamp: Date.now(), demoLoaded}));
+            if (record) {
+                let programChanged = true;
+                try {
+                    programChanged = JSON.stringify(record.program) !== JSON.stringify(safeProgram(vm, tutorApiKey));
+                } catch (err) { /* 無法核對時保留未知變更，不當作相同程式。 */ }
+                setRecordStatus(await postGradeRecord({
+                    ...record,
+                    status: 'completed',
+                    totalScore,
+                    maxScore,
+                    programChanged
+                }));
+            }
         } catch (err) {
             setGrading({
                 isRunning: false,
@@ -476,6 +551,13 @@ const JudgePanel = ({vm}) => {
                 results: null,
                 error: err && err.message ? err.message : String(err)
             });
+            if (record) {
+                setRecordStatus(await postGradeRecord({...record, status: 'failed', errorCode: 'GRADING_FAILED'}));
+            }
+        } finally {
+            // 每次入口已同步鎖住；finally 無條件釋放，不依賴舊值。
+            // eslint-disable-next-line require-atomic-updates
+            gradingRunRef.current = false;
         }
     };
 
@@ -553,58 +635,133 @@ const JudgePanel = ({vm}) => {
 
     const scoreLabel = grading.totalScore === null ? '尚未評分' : `${grading.totalScore} / ${grading.maxScore}`;
 
+    const studentCodeExpanded = studentCodeEditing || !validStudentId(studentId);
+    const recordControls = (
+        <section
+            className={[styles.recordControls,
+                validStudentId(studentId) ? styles.recordReady : styles.recordRequired].join(' ')}
+        >
+            {studentCodeExpanded ? (
+                <div>
+                    <p role="status">
+                        <strong>{validStudentId(studentId) ? '確認學生代號' : '請先填寫學生代號'}</strong>
+                        {!validStudentId(studentId) && <span>{'未填寫或格式不符，提問與評分不會保存。'}</span>}
+                    </p>
+                    <label htmlFor="student-code">{'在這裡填寫學生代號（例如 S01）'}</label>
+                    <input
+                        id="student-code"
+                        maxLength={40}
+                        aria-invalid={Boolean(studentId) && !validStudentId(studentId)}
+                        aria-describedby="student-code-help"
+                        placeholder="例如：S01"
+                        value={studentId}
+                        onChange={handleStudentCode}
+                    />
+                    <p id="student-code-help">
+                        {'可用中英文字、數字、底線或減號，1～40 字元，不含空白。同一位學生請使用相同代號。'}
+                    </p>
+                    <button
+                        disabled={!validStudentId(studentId)}
+                        onClick={handleConfirmStudentCode}
+                    >{'確認代號'}</button>
+                </div>
+            ) : (
+                <div className={styles.recordCompact}>
+                    <strong role="status">{`學生代號：${studentId}`}</strong>
+                    <button onClick={handleEditStudentCode}>{'修改'}</button>
+                </div>
+            )}
+        </section>
+    );
+
     return (
-        <div className={styles.judgePanel}>
-            <div className={styles.header}>
-                <div className={styles.headerLeft}>
-                    <button
-                        className={styles.backButton}
-                        onClick={handleBackFromTask}
-                    >
-                        ← 上一頁
-                    </button>
-                    <span className={styles.taskTitle}>{task.title}</span>
-                    {demoLoaded ? (
-                        <span className={styles.headerDemoTag}>載入範例中</span>
-                    ) : null}
+        <React.Fragment>
+            <div className={styles.judgePanel}>
+                <div className={styles.header}>
+                    <div className={styles.headerLeft}>
+                        <button
+                            className={styles.backButton}
+                            onClick={handleBackFromTask}
+                        >
+                            ← 上一頁
+                        </button>
+                        <span className={styles.taskTitle}>{task.title}</span>
+                        {demoLoaded ? (
+                            <span className={styles.headerDemoTag}>載入範例中</span>
+                        ) : null}
+                    </div>
+                    <div className={styles.headerRight}>
+                        {visitCount !== null && (
+                            <span className={styles.visitCounter}>累計造訪次數：{visitCount}</span>
+                        )}
+                        <span className={styles.scoreBadge}>{scoreLabel}</span>
+                    </div>
                 </div>
-                <div className={styles.headerRight}>
-                    {visitCount !== null && (
-                        <span className={styles.visitCounter}>累計造訪次數：{visitCount}</span>
-                    )}
-                    <span className={styles.scoreBadge}>{scoreLabel}</span>
-                </div>
-            </div>
-            <div className={styles.tabBar}>
-                {TABS.map(tab => (
+                <div className={styles.tabBar}>
+                    {TABS.map(tab => (
+                        <button
+                            className={activeTab === tab.id ? styles.tabButtonActive : styles.tabButton}
+                            key={tab.id}
+                            onClick={() => setActiveTab(tab.id)}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
                     <button
-                        className={activeTab === tab.id ? styles.tabButtonActive : styles.tabButton}
-                        key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
-                    >
-                        {tab.label}
-                    </button>
-                ))}
+                        className={tutorOpen ? styles.tabButtonActive : styles.tabButton}
+                        aria-controls="floating-tutor-window"
+                        aria-expanded={tutorOpen && !tutorMinimized}
+                        aria-haspopup="dialog"
+                        ref={tutorOpenerRef}
+                        type="button"
+                        onClick={handleTutorOpen}
+                    >{'解題導師'}</button>
+                </div>
+                {recordControls}
+                {recordStatus && <p
+                    className={styles.recordNotice}
+                    aria-live="polite"
+                >{recordStatus}</p>}
+                {activeTab === 'description' && (
+                    <DescriptionTab
+                        demoLoaded={demoLoaded}
+                        demoStatus={demoStatus}
+                        scaffoldUrl={scaffoldUrl}
+                        task={task}
+                        onLoadDemo={handleLoadDemo}
+                    />
+                )}
+                {activeTab === 'selftest' && <SelfTestTab vm={vm} />}
+                {activeTab === 'grading' && (
+                    <GradingTab
+                        demoLoaded={demoLoaded}
+                        grading={grading}
+                        onRunGrading={handleRunGrading}
+                    />
+                )}
+                {activeTab === 'history' && <HistoryTab history={history} />}
             </div>
-            {activeTab === 'description' && (
-                <DescriptionTab
-                    demoLoaded={demoLoaded}
-                    demoStatus={demoStatus}
-                    scaffoldUrl={scaffoldUrl}
+            <FloatingTutor
+                key={task.code}
+                minimized={tutorMinimized}
+                open={tutorOpen}
+                onClose={handleTutorClose}
+                onMinimize={handleTutorMinimize}
+                onRestore={handleTutorOpen}
+            >
+                <TutorTab
+                    apiKey={tutorApiKey}
+                    grading={grading.taskCode === task.code ? grading : null}
+                    key={task.code}
+                    mode={tutorMode}
                     task={task}
-                    onLoadDemo={handleLoadDemo}
+                    visible={tutorOpen && !tutorMinimized}
+                    vm={vm}
+                    onKeyChange={handleTutorKeyChange}
+                    onModeChange={handleTutorModeChange}
                 />
-            )}
-            {activeTab === 'selftest' && <SelfTestTab vm={vm} />}
-            {activeTab === 'grading' && (
-                <GradingTab
-                    demoLoaded={demoLoaded}
-                    grading={grading}
-                    onRunGrading={handleRunGrading}
-                />
-            )}
-            {activeTab === 'history' && <HistoryTab history={history} />}
-        </div>
+            </FloatingTutor>
+        </React.Fragment>
     );
 };
 

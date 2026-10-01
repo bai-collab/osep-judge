@@ -26,3 +26,11 @@ npm-*
 
 # for act
 .secrets
+/local-data/
+
+# 本機設定、秘密與審查流程設定
+.env
+.env.*
+!.env.example
+/config.local.toml
+/*-review.json

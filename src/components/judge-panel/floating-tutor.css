@@ -1,0 +1,90 @@
+.window {
+    position: fixed;
+    z-index: 505;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: #fff;
+    color: #233b65;
+    border: 1px solid #829bc6;
+    border-radius: 12px;
+    box-shadow: 0 12px 40px #172d5540, 0 2px 8px #172d5526;
+    font-family: inherit;
+}
+
+.window[hidden], .dock[hidden] { display: none; }
+.titlebar {
+    display: flex;
+    align-items: center;
+    flex: 0 0 48px;
+    padding: 4px;
+    gap: 4px;
+    box-sizing: border-box;
+    background: #e7effc;
+    border-bottom: 1px solid #c8d5eb;
+}
+.move-handle {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    min-height: 40px;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: move;
+    touch-action: none;
+    user-select: none;
+}
+.move-handle strong { white-space: nowrap; }
+.move-handle span { font-size: 11px; }
+.control, .resize-handle {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 22px;
+    cursor: pointer;
+}
+.control:hover, .move-handle:hover, .resize-handle:hover { background: #d2e0f7; }
+.window button:focus-visible, .dock:focus-visible { outline: 2px solid #3267bb; outline-offset: -2px; }
+.content { display: flex; flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; }
+.content > section { margin: 0; border: 0; border-radius: 0; }
+.resize-bar {
+    display: flex;
+    flex: 0 0 40px;
+    align-items: center;
+    justify-content: space-between;
+    padding-left: 12px;
+    border-top: 1px solid #d7e1f2;
+    background: #f4f7fc;
+    font-size: 11px;
+}
+.resize-handle { cursor: nwse-resize; touch-action: none; user-select: none; }
+.dock {
+    position: fixed;
+    z-index: 505;
+    right: 12px;
+    bottom: 12px;
+    min-height: 44px;
+    padding: 8px 16px;
+    border: 1px solid #829bc6;
+    border-radius: 10px;
+    background: #e7effc;
+    color: #233b65;
+    box-shadow: 0 3px 14px #172d5540;
+    font: inherit;
+    cursor: pointer;
+}

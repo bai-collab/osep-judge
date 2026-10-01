@@ -4,6 +4,17 @@ osep-judge 是一個以 Scratch 積木程式解題為主的教學平台，介面
 式解題平台（demo.csie.ntnu.edu.tw/ps）修改，供國小學生練習程式解題與縣市競
 賽準備使用。
 
+## 本機 AI 解題導師與教師記錄
+
+新增同頁浮動解題導師、相關積木高亮、學生提問／評分紀錄，以及教師查看與 Google 試算表同步。本機服務需啟動後才可使用；GitHub Pages 只有靜態編輯器，不能執行本機 API。
+
+- **第一次使用與設定**：[教師快速設定](TEACHER-SETUP.md)，包含下載建置、API 金鑰、Google Apps Script 與交給學生的步驟。
+- **導師操作與限制**：[本機解題導師](LOCAL-TUTOR.md)。
+- **記錄與同步**：[學習記錄](LEARNING-RECORDS.md)。
+- **Google 腳本**：[Code.gs](scripts/tutor/sheets/Code.gs)。
+
+帳密與學生紀錄只放本機 `local-data/`，不隨 Git 提交；不要把這個資料夾複製給學生或上傳 GitHub。
+
 ## 課程內容
 
 - **114學年度縣市競賽題目**：由參與共享的17個縣市提供（16個縣市已上架，連

@@ -1,0 +1,76 @@
+.tutor {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    margin: 8px;
+    border: 1px solid #a8b4c6;
+    border-radius: 8px;
+    font-size: 14px;
+    line-height: 1.65;
+    color: #24334a;
+    overflow-wrap: anywhere;
+}
+.tutor input, .tutor textarea, .tutor select {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px;
+    border: 1px solid #a8b4c6;
+    border-radius: 6px;
+    background: #fff;
+    color: #24334a;
+    font: inherit;
+    min-height: 40px;
+}
+.tutor textarea {resize: none; max-height: 80px;}
+.tutor button {
+    min-height: 40px;
+    border: 1px solid #839bbd;
+    border-radius: 6px;
+    padding: 6px 10px;
+    background: #edf3ff;
+    color: #24334a;
+    cursor: pointer;
+    font: inherit;
+}
+.tutor button:disabled {opacity: .6; cursor: wait;}
+.tutor button:focus-visible, .tutor input:focus-visible, .tutor textarea:focus-visible, .tutor select:focus-visible {
+    outline: 2px solid #386cc7;
+    outline-offset: 2px;
+}
+.intro {margin: 0 0 12px;}
+.label {display: block; font-weight: bold; margin: 12px 0 4px;}
+.key-row {display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px;}
+.note, .source {font-size: 12px; color: #4e617b;}
+.submit {width: 100%; margin-top: 10px;}
+.error {background: #fff0ed; padding: 10px; border-left: 3px solid #b83f35;}
+.turn {margin-top: 12px; padding: 10px; background: #f4f7fc; border-radius: 8px;}
+.turn p {white-space: pre-wrap; margin: 6px 0;}
+.window-header {display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px;
+    padding: 8px; flex-shrink: 0; background: #edf3ff; border-bottom: 1px solid #a8b4c6;}
+.observation {padding: 8px; flex-shrink: 0; font-size: 12px; background: #f7f9fc;}
+.observation button {margin-left: 8px;}
+.observation p {margin: 2px 0;}
+.observation > button {margin: 0; min-height: 40px; padding: 4px 8px; font-size: 12px;}
+.observation > div {max-height: 130px; overflow-y: auto;}
+.record-status {margin: 0; padding: 3px 10px; font-size: 12px; flex-shrink: 0;}
+.settings {padding: 0 10px; max-height: 45%; overflow-y: auto; flex: 0 1 auto; min-height: 0;}
+.settings[hidden] {display: none;}
+.conversation {flex: 1 1 0; min-height: 50px; overflow-y: auto; overscroll-behavior: contain; padding: 10px;}
+.conversation:focus-visible {outline: 2px solid #386cc7; outline-offset: -2px;}
+.composer {padding: 8px 10px; flex-shrink: 0; background: #fff; border-top: 1px solid #a8b4c6;}
+.composer .label {margin-top: 0;}
+.error {margin: 0 8px; max-height: 64px; overflow-y: auto; flex-shrink: 0;}
+.intro {font-size: 13px;}
+.related {border-top: 1px solid #d4dcea; margin-top: 8px; padding-top: 6px; font-size: 12px;}
+.related button {margin: 4px 6px 0 0;}
+/* 根節點標記只影響這個積木自己的外形；不染到巢狀子積木或輸入槽。 */
+:global([data-osep-tutor-highlight="true"] > .blocklyPath) {
+    stroke: #e50070 !important;
+    stroke-width: 4px !important;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}

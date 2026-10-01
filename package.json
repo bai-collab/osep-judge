@@ -19,12 +19,14 @@
     "i18n:push": "tx-push-src scratch-editor interface translations/en.json",
     "i18n:src": "rimraf ./translations/messages/src && babel src > tmp.js && rimraf tmp.js && build-i18n-src ./translations/messages/src ./translations/",
     "start": "webpack-dev-server",
-    "test": "npm run test:lint && npm run test:unit && npm run build && npm run test:integration",
+    "test": "npm run tutor:test && npm run test:lint && npm run test:unit && npm run build && npm run test:integration",
     "test:integration": "jest --maxWorkers=4 test[\\\\/]integration",
     "test:lint": "eslint . --ext .js,.jsx",
     "test:unit": "jest test[\\\\/]unit[\\\\/]addons",
     "test:smoke": "jest --runInBand test[\\\\/]smoke",
-    "watch": "webpack --colors --watch"
+    "watch": "webpack --colors --watch",
+    "tutor:serve": "node scripts/tutor/server.mjs",
+    "tutor:test": "node --test scripts/tutor/tutor.test.mjs scripts/tutor/tutor-connection.test.mjs scripts/tutor/floating-tutor.test.mjs scripts/tutor/tutor-highlight.test.mjs scripts/tutor/learning-records.test.mjs scripts/tutor/grading-records.test.mjs scripts/tutor/teacher-settings.test.mjs"
   },
   "config": {
     "commitizen": {
