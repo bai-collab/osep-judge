@@ -9,7 +9,7 @@ import styles from './floating-tutor.css';
 const viewport = () => ({width: window.innerWidth, height: window.innerHeight});
 const directions = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]};
 
-const FloatingTutor = ({children, open, minimized, onClose, onMinimize, onRestore}) => {
+const FloatingTutor = ({children, mode, open, minimized, onClose, onMinimize, onRestore}) => {
     const [everOpened, setEverOpened] = useState(open);
     const [rect, setRect] = useState(() => initialTutorRect(viewport()));
     const interaction = useRef(null);
@@ -106,7 +106,7 @@ const FloatingTutor = ({children, open, minimized, onClose, onMinimize, onRestor
                         onPointerUp={handlePointerEnd}
                     >
                         <strong id="floating-tutor-title">解題導師</strong>
-                        <span>拖曳這裡移動</span>
+                        <span>{`${mode === 'live' ? 'NMKING 真實模型' : '模擬練習'} · 拖曳這裡移動`}</span>
                     </button>
                     <button
                         className={styles.control}
@@ -154,6 +154,7 @@ const FloatingTutor = ({children, open, minimized, onClose, onMinimize, onRestor
 
 FloatingTutor.propTypes = {
     children: PropTypes.node.isRequired,
+    mode: PropTypes.oneOf(['mock', 'live']).isRequired,
     minimized: PropTypes.bool.isRequired,
     onClose: PropTypes.func.isRequired,
     onMinimize: PropTypes.func.isRequired,

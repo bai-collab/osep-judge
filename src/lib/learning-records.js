@@ -18,6 +18,7 @@ const useStudentIdentity = () => {
     const [value, setValue] = React.useState(studentId);
     React.useEffect(() => {
         listeners.add(setValue);
+        setValue(studentId);
         return () => listeners.delete(setValue);
     }, []);
     return {studentId: value, setStudentId};
@@ -65,6 +66,7 @@ const postGradeRecord = async record => {
     }
 };
 module.exports = {useStudentIdentity,
+    setStudentId,
     validStudentId,
     newRecordId,
     captureProgram,

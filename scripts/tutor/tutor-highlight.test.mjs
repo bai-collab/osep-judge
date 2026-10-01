@@ -167,7 +167,7 @@ const mount = () => {
         const [apiKey, updateKey] = React.useState('invalid-memory-only-key');
         setVisible = updateVisible;
         setKey = updateKey;
-        return React.createElement(TutorTab, {initialConnection: {managed: false}, task: {code: 'test', title: '測試', description: '讀取名字。'},
+        return React.createElement(TutorTab, {task: {code: 'test', title: '測試', description: '讀取名字。'},
             vm: {toJSON: () => JSON.stringify({targets: []})}, mode: 'mock', apiKey, onKeyChange: updateKey,
             onModeChange() {}, visible});
     };
@@ -211,7 +211,7 @@ test('真正元件回覆自動高亮；更新、取消、重顯與浮窗開關�
     assert.equal(f.placed.svg.getAttribute(HIGHLIGHT_ATTRIBUTE), null);
     f.visibility(true);
     assert.equal(f.placed.svg.getAttribute(HIGHLIGHT_ATTRIBUTE), 'true');
-    assert.equal(f.root.root.findByProps({role: 'status'}).children.join(''), '金鑰已輸入。更新觀察不需重貼。');
+    assert.equal(f.root.root.findByProps({role: 'status'}).children.join(''), '連線由教師設定；更新觀察不影響設定。');
     assert.equal(f.root.root.findByProps({role: 'log'}).findAllByType('article').length, 1);
     assert.equal(calls, 1);
 });

@@ -105,6 +105,7 @@ import oldtimeyLogo from './oldtimey-logo.svg';
 import sharedMessages from '../../lib/shared-messages';
 
 import SeeInsideButton from './tw-see-inside.jsx';
+import TutorControls from './tutor-controls.jsx';
 import {notScratchDesktop} from '../../lib/isScratchDesktop.js';
 import {APP_NAME} from '../../lib/brand.js';
 
@@ -1011,6 +1012,7 @@ class MenuBar extends React.Component {
                             />
                         ) : []))}
                     </div>
+                    <TutorControls />
                     {/* tw: add a feedback button */}
                     <div className={styles.menuBarItem}>
                         <a

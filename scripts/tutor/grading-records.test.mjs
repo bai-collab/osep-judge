@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url);
 const React = require('react'), {create, act} = require('react-test-renderer'), VM = require('scratch-vm');
+const {setStudentId} = require('../../src/lib/learning-records.js');
 const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/components/judge-panel/judge-panel.jsx');
 const sourceRequire = createRequire(source);
 const code = require('@babel/core').transformFileSync(source, {babelrc: false, configFile: false,
@@ -45,7 +46,7 @@ test('真正評分按鈕保存按下當時程式與分數；重複點擊不重�
     await act(async () => {root = create(React.createElement(JudgePanel, {vm}));});
     const button = text => root.root.findAllByType('button').find(node => node.props.children === text);
     await act(async () => button('選測試題').props.onClick());
-    act(() => root.root.findByProps({id: 'student-code'}).props.onChange({target: {value: 'S01'}}));
+    act(() => setStudentId('S01'));
     act(() => button('評分').props.onClick());
     let resolveGrade, calls = 0;
     gradeImpl = () => {calls++; return new Promise(resolve => {resolveGrade = resolve;});};
@@ -71,7 +72,7 @@ test('真正評分按鈕保存按下當時程式與分數；重複點擊不重�
     assert.equal(records[2].status, 'failed');
     assert.equal(records[2].errorCode, 'GRADING_FAILED');
     assert.ok(!JSON.stringify(records[2]).includes('GRADER_INTERNAL'));
-    act(() => root.root.findByProps({id: 'student-code'}).props.onChange({target: {value: ''}}));
+    act(() => setStudentId(''));
     await act(async () => button('執行評分').props.onClick());
     assert.equal(records.length, 3);
 });

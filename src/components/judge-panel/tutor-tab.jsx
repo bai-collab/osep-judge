@@ -8,19 +8,20 @@ import {readTutorEditor} from '../../lib/tutor-editor.js';
 import {groundRelatedBlocks, createTutorBlockHighlight} from '../../lib/tutor-block-highlight.js';
 import LazyScratchBlocks from '../../lib/tw-lazy-scratch-blocks';
 import styles from './tutor.css';
+import {useTutorConnection} from '../../lib/tutor-connection.js';
 import {useStudentIdentity, validStudentId, newRecordId,
     safeProgram, recordingText} from '../../lib/learning-records.js';
 
-export const TutorTab = ({task, vm, grading, apiKey, onKeyChange, mode, onModeChange, toolboxXML, visible = true,
-    initialConnection = null}) => {
-    const [connection, setConnection] = useState(initialConnection || {managed: true, aiConfigured: false});
+export const TutorTab = ({task, vm, grading, apiKey, mode, toolboxXML, visible = true,
+    connection: connectionProp = null}) => {
+    const sharedConnection = useTutorConnection();
+    const connection = connectionProp || sharedConnection;
     const [question, setQuestion] = useState('');
     const [turns, setTurns] = useState([]);
     const [running, setRunning] = useState(false);
     const [error, setError] = useState('');
     const requestRef = useRef(null);
     const conversationRef = useRef(null);
-    const [settingsOpen, setSettingsOpen] = useState(false);
     const [observationOpen, setObservationOpen] = useState(false);
     const [recordStatus, setRecordStatus] = useState('');
     const {studentId} = useStudentIdentity();
@@ -32,26 +33,6 @@ export const TutorTab = ({task, vm, grading, apiKey, onKeyChange, mode, onModeCh
     const [highlightStatus, setHighlightStatus] = useState(null);
     const local = window.location.protocol === 'http:' &&
         ['127.0.0.1', 'localhost'].includes(window.location.hostname);
-
-    useEffect(() => {
-        if (!local || initialConnection) return () => {};
-        const controller = new AbortController();
-        const refresh = () => fetch('./api/tutor/status', {signal: controller.signal})
-            .then(response => {
-                if (!response.ok) throw new Error('STATUS_UNAVAILABLE'); return response.json();
-            })
-            .then(status => {
-                if (typeof status.managed !== 'boolean') throw new Error('INVALID_STATUS');
-                setConnection({managed: status.managed, aiConfigured: status.aiConfigured === true});
-                if (status.managed) onKeyChange('');
-            })
-            .catch(() => {});
-        refresh();
-        window.addEventListener('focus', refresh);
-        return () => {
-            controller.abort(); window.removeEventListener('focus', refresh);
-        };
-    }, [local, initialConnection, onKeyChange]);
 
     useEffect(() => () => {
         if (requestRef.current) requestRef.current.abort();
@@ -109,7 +90,7 @@ export const TutorTab = ({task, vm, grading, apiKey, onKeyChange, mode, onModeCh
             return;
         }
         if (mode === 'live' && !connection.managed && !apiKey.trim()) {
-            setError('請先在上方遮蔽欄位輸入金鑰。');
+            setError('目前教師服務尚未設定真實模型。');
             return;
         }
         if (apiKey && (question.includes(apiKey) || studentId.includes(apiKey))) {
@@ -134,7 +115,6 @@ export const TutorTab = ({task, vm, grading, apiKey, onKeyChange, mode, onModeCh
                 }
             }
             setRecordStatus(recordWarning || (learning ? '記錄準備中…' : recordingText(null)));
-            setSettingsOpen(false);
             const response = await fetch('./api/tutor', {
                 method: 'POST',
                 signal: controller.signal,
@@ -178,15 +158,6 @@ export const TutorTab = ({task, vm, grading, apiKey, onKeyChange, mode, onModeCh
         }
     };
 
-    const clearKey = () => {
-        if (requestRef.current) requestRef.current.abort();
-        requestRef.current = null;
-        setRunning(false);
-        onKeyChange('');
-        setError('');
-    };
-    const handleKeyInput = event => onKeyChange(event.currentTarget.value);
-
     return (
         <section
             className={styles.tutor}
@@ -194,12 +165,6 @@ export const TutorTab = ({task, vm, grading, apiKey, onKeyChange, mode, onModeCh
         >
             <header className={styles.windowHeader}>
                 <strong>題目：{task.title}</strong>
-                <button
-                    aria-controls="tutor-settings"
-                    aria-expanded={settingsOpen}
-                    type="button"
-                    onClick={() => setSettingsOpen(previous => !previous)}
-                >連線設定</button>
             </header>
             <div className={styles.observation}>
                 <button
@@ -210,7 +175,7 @@ export const TutorTab = ({task, vm, grading, apiKey, onKeyChange, mode, onModeCh
                 >{observationOpen ? '收合積木觀察' : '積木觀察（求助時自動更新）'}</button>
                 <div
                     id="tutor-observation"
-                    hidden={!observationOpen || settingsOpen}
+                    hidden={!observationOpen}
                 >
                     <p role="status">{connection.managed ? '連線由教師設定；更新觀察不影響設定。' :
                         apiKey ? '金鑰已輸入。更新觀察不需重貼。' : '尚未輸入金鑰；模擬模式可直接使用。'}</p>
@@ -228,68 +193,6 @@ export const TutorTab = ({task, vm, grading, apiKey, onKeyChange, mode, onModeCh
                     {observation && observation.omitted > 0 && <p>細節省略 {observation.omitted} 個，仍提供種類統計。</p>}
                 </div>
             </div>
-            <div
-                id="tutor-settings"
-                className={styles.settings}
-                hidden={!settingsOpen}
-            >
-                <p className={styles.note}>設定完成後，收合即可回到原對話。</p>
-                <label
-                    className={styles.label}
-                    htmlFor="tutor-mode"
-                >導師模式</label>
-                <select
-                    disabled={running}
-                    id="tutor-mode"
-                    value={mode}
-                    onChange={event => {
-                        onModeChange(event.target.value);
-                        setTurns([]);
-                        setError('');
-                        setHighlightTargets([]);
-                        setHighlightTurn(null);
-                    }}
-                >
-                    <option value="mock">模擬練習（不呼叫模型）</option>
-                    <option value="live">NMKING 真實模型</option>
-                </select>
-                {connection.managed ? <p aria-live="polite">
-                    {connection.aiConfigured ? '教師已設定 AI 連線；金鑰由本機服務使用。' :
-                        '尚未確認 AI 連線設定；請由教師在教師頁設定。'}
-                    {' '}<a
-                        href="/teacher.html"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                    >教師設定頁</a>
-                </p> : <div>
-                    <label
-                        className={styles.label}
-                        htmlFor="tutor-api-key"
-                    >API 金鑰（僅本次網頁使用）</label>
-                    <input
-                        autoComplete="off"
-                        disabled={running || !local}
-                        id="tutor-api-key"
-                        placeholder="在這裡輸入你的 NMKING 金鑰"
-                        spellCheck={false}
-                        type="password"
-                        value={apiKey}
-                        onBlur={handleKeyInput}
-                        onChange={handleKeyInput}
-                        onInput={handleKeyInput}
-                    />
-                    <div className={styles.keyRow}>
-                        <span aria-live="polite">{apiKey ? '已輸入金鑰（不保存）' : '尚未輸入金鑰'}</span>
-                        <button
-                            type="button"
-                            onClick={clearKey}
-                        >清除金鑰</button>
-                    </div>
-                    <p className={styles.note}>
-                        金鑰留在本頁記憶體，更新觀察、切換分頁或收合面板不需重輸；清除或整頁重新載入才移除。真實模式按下求助才會送出題目、積木摘要及提問，可能產生 API 費用。
-                    </p>
-                </div>}
-            </div>
             {!local && <p role="alert">請從本機服務網址開啟此頁面使用導師。</p>}
             <div
                 className={styles.conversation}
@@ -297,7 +200,6 @@ export const TutorTab = ({task, vm, grading, apiKey, onKeyChange, mode, onModeCh
                 role="log"
                 aria-live="polite"
                 aria-busy={running}
-                hidden={settingsOpen}
                 ref={conversationRef}
                 tabIndex={0}
             >
@@ -381,11 +283,14 @@ export const TutorTab = ({task, vm, grading, apiKey, onKeyChange, mode, onModeCh
 
 TutorTab.propTypes = {
     apiKey: PropTypes.string.isRequired,
-    initialConnection: PropTypes.shape({managed: PropTypes.bool.isRequired, aiConfigured: PropTypes.bool}),
+    connection: PropTypes.shape({
+        managed: PropTypes.bool,
+        aiConfigured: PropTypes.bool,
+        mode: PropTypes.oneOf(['mock', 'live']),
+        statusReady: PropTypes.bool
+    }),
     grading: PropTypes.object,
     mode: PropTypes.oneOf(['mock', 'live']).isRequired,
-    onKeyChange: PropTypes.func.isRequired,
-    onModeChange: PropTypes.func.isRequired,
     task: PropTypes.object.isRequired,
     toolboxXML: PropTypes.string,
     visible: PropTypes.bool,

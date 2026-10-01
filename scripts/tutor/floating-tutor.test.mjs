@@ -46,20 +46,22 @@ const fixture = () => {
     globalThis.fetch = async () => new Response(JSON.stringify({
         source: 'mock', guidance: '保留的提示', question: '保留的追問'
     }), {headers: {'Content-Type': 'application/json'}});
-    const state = {events, focus: []};
+    const state = {events, focus: [], reads: 0};
     const task = {code: 'floating-fixture', title: '浮窗測試題', description: '讀取輸入。', examples: []};
-    const vm = {toJSON: () => JSON.stringify({targets: []})};
+    const vm = {toJSON: () => {
+        state.reads++;
+        return JSON.stringify({targets: []});
+    }};
     const Harness = () => {
         const [open, setOpen] = React.useState(false);
         const [minimized, setMinimized] = React.useState(false);
         const api = useTutorConnection();
         state.api = api;
         state.open = () => {setOpen(true); setMinimized(false);};
-        return React.createElement(FloatingTutor, {open, minimized,
+        return React.createElement(FloatingTutor, {open, minimized, mode: api.mode,
             onClose: () => {setOpen(false); setMinimized(false);},
             onMinimize: () => setMinimized(true), onRestore: state.open},
-        React.createElement(TutorTab, {task, vm, apiKey: api.apiKey, mode: api.mode, initialConnection: {managed: false},
-            onKeyChange: api.setApiKey, onModeChange: api.setMode}));
+        React.createElement(TutorTab, {task, vm, apiKey: api.apiKey, mode: api.mode}));
     };
     act(() => {state.root = create(React.createElement(Harness), {createNodeMock: element => ({
         focus: () => state.focus.push(element.props['aria-label'] || element.props.children)
@@ -130,34 +132,21 @@ test('實際標題列拖曳與右下角縮放改變位置尺寸；右鍵不啟�
     assert.deepEqual(captures, [7, -7, 7, -7]);
 });
 
-test('縮小、關閉再開與更新觀察保留真導師的對話、草稿、金鑰和模式', async () => {
+test('縮小、關閉再開與更新觀察保留真導師的對話、草稿和模式；浮窗不再放連線控制', async () => {
     const f = fixture();
     assert.equal(f.root.root.findAllByProps({id: 'tutor-question'}).length, 0);
     act(f.open);
-    act(() => f.root.root.findByProps({id: 'tutor-api-key'}).props.onInput({
-        currentTarget: {value: 'floating-regression-invalid-key'}
-    }));
     act(() => f.question().props.onChange({target: {value: '先問一輪'}}));
-    await act(async () => f.root.root.findByType('form').props.onSubmit({preventDefault() {}}));
-    act(() => f.question().props.onChange({target: {value: '未送出的草稿'}}));
-    act(() => f.root.root.findByProps({id: 'tutor-mode'}).props.onChange({target: {value: 'live'}}));
-    // 切模式原有行為會清對話；在live模式用本機替身重新建立一輪。
-    globalThis.fetch = async () => new Response(JSON.stringify({
-        source: 'nmking', guidance: '保留的提示', question: '保留的追問'
-    }), {headers: {'Content-Type': 'application/json'}});
     await act(async () => f.root.root.findByType('form').props.onSubmit({preventDefault() {}}));
     act(() => f.question().props.onChange({target: {value: '未送出的草稿'}}));
     const assertKept = () => {
         assert.equal(f.question().props.value, '未送出的草稿');
         assert.equal(f.root.root.findByProps({role: 'log'}).findAllByType('article').length, 1);
-        assert.equal(f.root.root.findByProps({id: 'tutor-mode'}).props.value, 'live');
-        assert.equal(f.root.root.findByProps({role: 'status'}).children.join(''), '金鑰已輸入。更新觀察不需重貼。');
+        assert.equal(f.root.root.findAllByProps({id: 'tutor-mode'}).length, 0);
+        assert.equal(f.root.root.findAllByProps({id: 'tutor-settings'}).length, 0);
+        assert.equal(f.root.root.findAllByType('button').some(button => button.props.children === '連線設定'), false);
     };
-    act(() => f.button('連線設定').props.onClick());
-    assert.equal(f.root.root.findByProps({role: 'log'}).props.hidden, true);
     assertKept();
-    act(() => f.button('連線設定').props.onClick());
-    assert.equal(f.root.root.findByProps({role: 'log'}).props.hidden, false);
     assertKept();
     act(() => f.control('縮小解題導師').props.onClick());
     assert.equal(f.dialog().props.hidden, true);
@@ -169,6 +158,10 @@ test('縮小、關閉再開與更新觀察保留真導師的對話、草稿、�
     act(f.open);
     act(() => f.button('更新觀察').props.onClick());
     assert.equal(f.dialog().props.hidden, false);
+    assertKept();
+    const readsBeforeRefresh = f.reads;
+    act(() => f.root.root.findByProps({id: 'tutor-observation'}).findAllByType('button')[0].props.onClick());
+    assert.equal(f.reads, readsBeforeRefresh + 1);
     assertKept();
 });
 

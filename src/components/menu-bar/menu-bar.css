@@ -111,6 +111,162 @@
     height: 34px;
 }
 
+.osep-controls {
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+    height: $menu-bar-height;
+}
+
+.osep-control-item {
+    position: relative;
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    min-width: 0;
+    height: $menu-bar-height;
+}
+
+.osep-control-button,
+.osep-control-label {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    min-height: 34px;
+    max-width: 12rem;
+    padding: 0 0.5rem;
+    border: 1px solid $ui-white-transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: $menu-bar-foreground;
+    font: inherit;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.osep-control-label {
+    cursor: default;
+}
+
+.osep-control-button:hover,
+.osep-control-button:focus-visible {
+    background: $ui-black-transparent;
+}
+
+.osep-control-button:focus-visible,
+.osep-panel input:focus-visible,
+.osep-panel select:focus-visible,
+.osep-panel a:focus-visible,
+.osep-panel button:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+.osep-control-wide-label,
+.osep-control-short-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.osep-control-short-label {
+    display: none;
+}
+
+.osep-panel {
+    position: absolute;
+    top: $menu-bar-height;
+    right: 0;
+    z-index: $z-index-menu-bar;
+    box-sizing: border-box;
+    width: 280px;
+    padding: 12px;
+    border: 1px solid #7d8da8;
+    border-radius: 0 0 8px 8px;
+    background: #fff;
+    color: #24334a;
+    box-shadow: 0 5px 16px #172d5540;
+    font-weight: normal;
+    white-space: normal;
+}
+
+.osep-student-panel {
+    width: 320px;
+}
+
+.osep-panel label {
+    display: block;
+    margin: 0 0 4px;
+    font-weight: bold;
+}
+
+.osep-panel input,
+.osep-panel select {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 40px;
+    padding: 6px 8px;
+    border: 1px solid #829bc6;
+    border-radius: 4px;
+    background: #fff;
+    color: #24334a;
+    font: inherit;
+}
+
+.osep-panel p {
+    margin: 8px 0;
+    overflow-wrap: anywhere;
+}
+
+.osep-panel a {
+    color: #174f9f;
+    font-weight: bold;
+}
+
+.osep-warning {
+    padding: 8px;
+    border-left: 4px solid #b35a00;
+    background: #fff4dc;
+    color: #653300;
+}
+
+.osep-warning strong,
+.osep-warning span {
+    display: block;
+}
+
+.osep-warning span {
+    margin-top: 4px;
+    font-weight: bold;
+}
+
+.osep-panel input[aria-invalid="true"] {
+    border-color: #b33a24;
+    background: #fff7f4;
+}
+
+.osep-confirm-button {
+    min-height: 40px;
+    padding: 6px 12px;
+    border: 1px solid #297447;
+    border-radius: 4px;
+    background: #eef8f1;
+    color: #17492c;
+    cursor: pointer;
+    font: inherit;
+    font-weight: bold;
+}
+
+.osep-confirm-button:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
 .divider {
     height: 34px;
 }
@@ -226,6 +382,36 @@
 
     .help-icon {
         margin-right: 0;
+    }
+
+    .osep-control-wide-label {
+        display: none;
+    }
+
+    .osep-control-short-label {
+        display: inline;
+    }
+}
+
+@media only screen and (max-width: 760px) {
+    .osep-controls {
+        gap: 0;
+    }
+
+    .osep-control-button,
+    .osep-control-label {
+        max-width: 5.5rem;
+        padding: 0 0.25rem;
+        font-size: 0.75rem;
+    }
+
+    .osep-panel {
+        right: -0.25rem;
+        width: min(280px, calc(100vw - 16px));
+    }
+
+    .osep-student-panel {
+        width: min(320px, calc(100vw - 16px));
     }
 }
 

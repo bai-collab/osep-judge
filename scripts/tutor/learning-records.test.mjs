@@ -9,10 +9,33 @@ import {createRecordStore, cleanRecord, summarize} from './record-store.mjs';
 import {createSheetClient} from './sheet-client.mjs';
 import {createTutorServer} from './server.mjs';
 const require = createRequire(import.meta.url);
+const React = require('react');
+const {create, act} = require('react-test-renderer');
 const {captureProgram, safeProgram, validStudentId} = require('../../src/lib/learning-records.js');
 const modelResponse = result => new Response(JSON.stringify({status: 'completed', output: [
     {type: 'message', content: [{type: 'output_text', text: JSON.stringify(result)}]}
 ]}));
+
+test('useStudentIdentity 在訂閱前全域值改變時會同步最新值', () => {
+    const {setStudentId, useStudentIdentity} = require('../../src/lib/learning-records.js');
+    setStudentId('');
+    const state = {changed: false};
+    const Harness = () => {
+        state.identity = useStudentIdentity();
+        if (!state.changed) {
+            state.changed = true;
+            state.identity.setStudentId('S01');
+        }
+        return null;
+    };
+    try {
+        act(() => {state.root = create(React.createElement(Harness));});
+        assert.equal(state.identity.studentId, 'S01');
+    } finally {
+        act(() => state.root?.unmount());
+        setStudentId('');
+    }
+});
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const scratch = path.resolve(root, '../../workspace/osep-judge/learning-records-01');
 const program = {targets: [{name: '學生角色', blocks: {a: {opcode: 'looks_say', next: null, parent: null,

@@ -24,15 +24,16 @@ new Function('require', 'module', 'exports', code)(name => {
     return sourceRequire(name);
 }, subject, subject.exports);
 const {TutorTab} = subject.exports;
-const harmlessKey = 'observation-regression-invalid-key';
 const task = {code: 'fixture', title: '測試題', description: '讀取輸入。', examples: []};
 const originalWindow = globalThis.window;
 const originalFetch = globalThis.fetch;
 const fixtures = [];
 
-const fixture = (initialConnection = {managed: false}) => {
+const fixture = (initialConnection = {managed: true, aiConfigured: true}) => {
     globalThis.window = {location: {protocol: 'http:', hostname: '127.0.0.1'}};
-    const state = {reads: 0, blocks: {}};
+    globalThis.fetch = async () => new Response(JSON.stringify({managed: true, aiConfigured: true}),
+        {headers: {'Content-Type': 'application/json'}});
+    const state = {reads: 0, blocks: {}, task};
     const vm = {toJSON: () => {
         state.reads++;
         return JSON.stringify({targets: [{name: '角色', blocks: state.blocks}]});
@@ -40,20 +41,20 @@ const fixture = (initialConnection = {managed: false}) => {
     const Harness = () => {
         const connection = useTutorConnection();
         state.api = connection;
-        return React.createElement(TutorTab, {task, vm, apiKey: connection.apiKey, initialConnection,
-            mode: connection.mode, onKeyChange: connection.setApiKey, onModeChange: connection.setMode});
+        return React.createElement(TutorTab, {key: state.task.code, task: state.task, vm, apiKey: connection.apiKey,
+            connection: {...initialConnection, statusReady: true}, mode: connection.mode});
     };
     state.mount = () => act(() => {state.root = create(React.createElement(Harness));});
     state.mount();
     act(() => {state.api.setApiKey(''); state.api.setMode('mock');});
     state.button = text => state.root.root.findAllByType('button')
         .find(node => node.props.children === text);
-    state.keyInput = () => state.root.root.findByProps({id: 'tutor-api-key'});
     state.question = () => state.root.root.findByProps({id: 'tutor-question'});
     state.status = () => state.root.root.findByProps({role: 'status'}).children.join('');
-    state.enter = () => act(() => {
-        state.keyInput().props.onInput({currentTarget: {value: harmlessKey}});
-        state.root.root.findByProps({id: 'tutor-mode'}).props.onChange({target: {value: 'live'}});
+    state.enter = () => act(() => state.api.setMode('live'));
+    state.switchTask = nextTask => act(() => {
+        state.task = nextTask;
+        state.root.update(React.createElement(Harness));
     });
     fixtures.push(state);
     return state;
@@ -88,65 +89,20 @@ afterEach(() => {
     globalThis.fetch = originalFetch;
 });
 
-test('真元件連續更新觀察保留金鑰、模式與草稿，下一次求助只送一次', async () => {
+test('真元件不再提供連線控制或金鑰欄；模式由共用連線狀態提供', async () => {
+    const f = fixture();
+    assert.equal(f.root.root.findAllByProps({id: 'tutor-api-key'}).length, 0);
+    assert.equal(f.root.root.findAllByProps({id: 'tutor-settings'}).length, 0);
+    assert.equal(f.root.root.findAllByProps({id: 'tutor-mode'}).length, 0);
+    assert.equal(f.root.root.findAllByType('button').some(button => button.props.children === '連線設定'), false);
+    f.enter();
+    assert.equal(f.api.mode, 'live');
+});
+
+test('觀察預設收合；展開及收合不求助、不清模式或草稿', () => {
     const f = fixture();
     let calls = 0;
-    globalThis.fetch = async (url, options) => {
-        calls++;
-        assert.equal(url, './api/tutor');
-        const body = JSON.parse(options.body);
-        assert.equal(body.apiKey, harmlessKey);
-        assert.equal(body.mode, 'live');
-        assert.equal(body.context.blocks[0].opcode, 'sensing_askandwait');
-        assert.ok(!JSON.stringify(body.context).includes(harmlessKey));
-        return new Response(JSON.stringify({source: 'nmking', guidance: '測試回覆', question: '測試追問'}),
-            {headers: {'Content-Type': 'application/json'}});
-    };
-    f.enter();
-    act(() => f.question().props.onChange({target: {value: '這個草稿要保留'}}));
-    const before = f.reads;
-    f.blocks.ask = {opcode: 'sensing_askandwait', fields: {}, inputs: {}};
-    for (let i = 0; i < 6; i++) act(() => f.button('更新觀察').props.onClick());
-    assert.equal(f.reads, before + 6);
-    assert.equal(f.status(), '金鑰已輸入。更新觀察不需重貼。');
-    assert.equal(f.root.root.findByProps({id: 'tutor-mode'}).props.value, 'live');
-    assert.equal(f.question().props.value, '這個草稿要保留');
-    assert.equal(calls, 0);
-    await act(async () => f.root.root.findByType('form').props.onSubmit({preventDefault() {}}));
-    assert.equal(calls, 1);
-    assert.equal(f.question().props.value, '');
-    assert.equal(f.root.root.findByProps({role: 'log'}).findAllByType('article').length, 1);
-});
-
-test('整個面板卸載重建仍保留連線；明確清除後再次重建維持空白', () => {
-    const f = fixture();
-    f.enter();
-    act(() => f.root.unmount());
-    f.mount();
-    assert.equal(f.status(), '金鑰已輸入。更新觀察不需重貼。');
-    assert.equal(f.root.root.findByProps({id: 'tutor-mode'}).props.value, 'live');
-    act(() => f.button('清除金鑰').props.onClick());
-    assert.ok(f.status().startsWith('尚未輸入金鑰'));
-    act(() => f.root.unmount());
-    f.mount();
-    assert.ok(f.status().startsWith('尚未輸入金鑰'));
-});
-
-test('瀏覽器填入只在離開欄位時通知，也能在更新前接住金鑰', () => {
-    const f = fixture();
-    act(() => f.keyInput().props.onBlur({currentTarget: {value: harmlessKey}}));
-    act(() => f.button('更新觀察').props.onClick());
-    assert.equal(f.status(), '金鑰已輸入。更新觀察不需重貼。');
-    act(() => f.root.unmount());
-    f.mount();
-    assert.equal(f.status(), '金鑰已輸入。更新觀察不需重貼。');
-});
-
-test('觀察預設收合；展開及收合不求助、不清金鑰或草稿', () => {
-    const f = fixture();
-    let calls = 0;
-    globalThis.fetch = () => {calls++;};
-    f.enter();
+    globalThis.fetch = async () => {calls++; return new Response('{}');};
     act(() => f.question().props.onChange({target: {value: '保留草稿'}}));
     const details = () => f.root.root.findByProps({id: 'tutor-observation'});
     assert.equal(details().props.hidden, true);
@@ -156,29 +112,68 @@ test('觀察預設收合；展開及收合不求助、不清金鑰或草稿', ()
     act(() => f.button('收合積木觀察').props.onClick());
     assert.equal(details().props.hidden, true);
     assert.equal(f.reads, reads);
-    assert.equal(f.status(), '金鑰已輸入。更新觀察不需重貼。');
+    assert.equal(f.status(), '連線由教師設定；更新觀察不影響設定。');
     assert.equal(f.question().props.value, '保留草稿');
     assert.equal(calls, 0);
 });
 
-test('清除金鑰中止進行中請求，遲到的結果不重新加入對話', async () => {
-    const f = fixture();
+test('real TutorTab refreshes observation repeatedly without losing mode, draft, or conversation', async () => {
+    const f = fixture({managed: true, aiConfigured: true});
+    let calls = 0;
+    globalThis.fetch = async (url, options) => {
+        calls++;
+        assert.equal(url, './api/tutor');
+        const body = JSON.parse(options.body);
+        assert.equal(body.mode, 'live');
+        assert.equal(body.context.blocks[0].opcode, 'sensing_askandwait');
+        return new Response(JSON.stringify({source: 'nmking', guidance: '測試回覆', question: '測試追問'}),
+            {headers: {'Content-Type': 'application/json'}});
+    };
+    f.enter();
+    act(() => f.question().props.onChange({target: {value: '這個草稿要保留'}}));
+    const before = f.reads;
+    f.blocks.ask = {opcode: 'sensing_askandwait', fields: {}, inputs: {}};
+    const refresh = () => f.root.root.findByProps({id: 'tutor-observation'}).findAllByType('button')[0];
+    for (let i = 0; i < 6; i++) act(() => refresh().props.onClick());
+    assert.equal(f.reads, before + 6);
+    assert.equal(f.api.mode, 'live');
+    assert.equal(f.question().props.value, '這個草稿要保留');
+    assert.equal(calls, 0);
+    await act(async () => f.root.root.findByType('form').props.onSubmit({preventDefault() {}}));
+    assert.equal(calls, 1);
+    assert.equal(f.question().props.value, '');
+    assert.equal(f.root.root.findByProps({role: 'log'}).findAllByType('article').length, 1);
+});
+
+test('shared tutor connection survives real TutorTab unmount and remount', () => {
+    const f = fixture({managed: true, aiConfigured: true});
+    act(() => {f.api.setApiKey('shared-state-key'); f.api.setMode('live');});
+    act(() => f.root.unmount());
+    f.mount();
+    assert.equal(f.api.apiKey, 'shared-state-key');
+    assert.equal(f.api.mode, 'live');
+    act(() => f.api.setApiKey(''));
+    assert.equal(f.api.apiKey, '');
+});
+
+test('real TutorTab aborts an in-flight request on task unmount and ignores its late response', async () => {
+    const f = fixture({managed: true, aiConfigured: true});
+    f.enter();
+    act(() => f.question().props.onChange({target: {value: '等待題目切換'}}));
     let signal;
     let resolveResponse;
     globalThis.fetch = async (url, options) => {
+        assert.equal(url, './api/tutor');
         signal = options.signal;
         return new Promise(resolve => {resolveResponse = resolve;});
     };
-    f.enter();
-    act(() => f.question().props.onChange({target: {value: '等待測試'}}));
     let pending;
     act(() => {pending = f.root.root.findByType('form').props.onSubmit({preventDefault() {}});});
     assert.equal(signal.aborted, false);
-    act(() => f.button('清除金鑰').props.onClick());
+    f.switchTask({...task, code: 'next-task', title: '下一題'});
     assert.equal(signal.aborted, true);
-    assert.ok(f.status().startsWith('尚未輸入金鑰'));
     await act(async () => {
-        resolveResponse(new Response(JSON.stringify({source: 'nmking', guidance: '遲到回覆', question: '追問'}),
+        resolveResponse(new Response(JSON.stringify({source: 'nmking', guidance: '遲到回覆', question: '不應出現'}),
             {headers: {'Content-Type': 'application/json'}}));
         await pending;
     });
@@ -186,8 +181,8 @@ test('清除金鑰中止進行中請求，遲到的結果不重新加入對話',
     assert.equal(f.question().props.disabled, false);
 });
 
-test('真正導師元件顯示後端安全錯誤，保留金鑰與草稿，下一次人工求助可成功', async () => {
-    const f = fixture();
+test('real TutorTab displays safe server errors and preserves draft for a later retry', async () => {
+    const f = fixture({managed: true, aiConfigured: true});
     let calls = 0;
     let responseBody;
     globalThis.fetch = async () => {
@@ -204,11 +199,12 @@ test('真正導師元件顯示後端安全錯誤，保留金鑰與草稿，下�
         await act(async () => f.root.root.findByType('form').props.onSubmit({preventDefault() {}}));
         assert.equal(calls, before + 1);
         assert.equal(f.root.root.findByProps({role: 'alert'}).children.join(''), responseBody.error);
-        assert.equal(f.status(), '金鑰已輸入。更新觀察不需重貼。');
+        assert.equal(f.api.mode, 'live');
         assert.equal(f.question().props.value, draft);
         assert.equal(f.question().props.disabled, false);
         assert.equal(f.root.root.findByProps({role: 'log'}).findAllByType('article').length, 0);
-        act(() => f.button('更新觀察').props.onClick());
+        const refresh = () => f.root.root.findByProps({id: 'tutor-observation'}).findAllByType('button')[0];
+        act(() => refresh().props.onClick());
         assert.equal(calls, before + 1);
     }
     responseBody = {source: 'nmking', guidance: '假回覆', question: '追問'};
@@ -216,5 +212,4 @@ test('真正導師元件顯示後端安全錯誤，保留金鑰與草稿，下�
     assert.equal(calls, 4);
     assert.equal(f.root.root.findAllByProps({role: 'alert'}).length, 0);
     assert.equal(f.root.root.findByProps({role: 'log'}).findAllByType('article').length, 1);
-    assert.equal(f.status(), '金鑰已輸入。更新觀察不需重貼。');
 });

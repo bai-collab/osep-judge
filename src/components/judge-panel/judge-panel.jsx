@@ -370,19 +370,15 @@ const JudgePanel = ({vm}) => {
     const [demoLoaded, setDemoLoaded] = useState(false);
     const [history, setHistory] = useState([]);
     const [visitCount, setVisitCount] = useState(null);
-    const {studentId, setStudentId} = useStudentIdentity();
-    const [studentCodeEditing, setStudentCodeEditing] = useState(() => !validStudentId(studentId));
-    const handleConfirmStudentCode = useCallback(() => setStudentCodeEditing(false), []);
-    const handleEditStudentCode = useCallback(() => setStudentCodeEditing(true), []);
-    const handleStudentCode = useCallback(event => setStudentId(event.target.value.trim()), [setStudentId]);
+    const {studentId} = useStudentIdentity();
     const [recordStatus, setRecordStatus] = useState('');
     const gradingRunRef = useRef(false);
     const [judgeContent, setJudgeContent] = useState(null);
     const [taskDetail, setTaskDetail] = useState(null);
     const [taskLoading, setTaskLoading] = useState(false);
     // 連線獨立留在本頁記憶體，面板重建、更新積木不會清除。
-    const {apiKey: tutorApiKey, mode: tutorMode,
-        setApiKey: handleTutorKeyChange, setMode: handleTutorModeChange} = useTutorConnection();
+    const tutorConnection = useTutorConnection();
+    const {apiKey: tutorApiKey, mode: tutorMode} = tutorConnection;
     const handleTutorOpen = useCallback(() => {
         setTutorOpen(true);
         setTutorMinimized(false);
@@ -635,45 +631,6 @@ const JudgePanel = ({vm}) => {
 
     const scoreLabel = grading.totalScore === null ? '尚未評分' : `${grading.totalScore} / ${grading.maxScore}`;
 
-    const studentCodeExpanded = studentCodeEditing || !validStudentId(studentId);
-    const recordControls = (
-        <section
-            className={[styles.recordControls,
-                validStudentId(studentId) ? styles.recordReady : styles.recordRequired].join(' ')}
-        >
-            {studentCodeExpanded ? (
-                <div>
-                    <p role="status">
-                        <strong>{validStudentId(studentId) ? '確認學生代號' : '請先填寫學生代號'}</strong>
-                        {!validStudentId(studentId) && <span>{'未填寫或格式不符，提問與評分不會保存。'}</span>}
-                    </p>
-                    <label htmlFor="student-code">{'在這裡填寫學生代號（例如 S01）'}</label>
-                    <input
-                        id="student-code"
-                        maxLength={40}
-                        aria-invalid={Boolean(studentId) && !validStudentId(studentId)}
-                        aria-describedby="student-code-help"
-                        placeholder="例如：S01"
-                        value={studentId}
-                        onChange={handleStudentCode}
-                    />
-                    <p id="student-code-help">
-                        {'可用中英文字、數字、底線或減號，1～40 字元，不含空白。同一位學生請使用相同代號。'}
-                    </p>
-                    <button
-                        disabled={!validStudentId(studentId)}
-                        onClick={handleConfirmStudentCode}
-                    >{'確認代號'}</button>
-                </div>
-            ) : (
-                <div className={styles.recordCompact}>
-                    <strong role="status">{`學生代號：${studentId}`}</strong>
-                    <button onClick={handleEditStudentCode}>{'修改'}</button>
-                </div>
-            )}
-        </section>
-    );
-
     return (
         <React.Fragment>
             <div className={styles.judgePanel}>
@@ -717,7 +674,6 @@ const JudgePanel = ({vm}) => {
                         onClick={handleTutorOpen}
                     >{'解題導師'}</button>
                 </div>
-                {recordControls}
                 {recordStatus && <p
                     className={styles.recordNotice}
                     aria-live="polite"
@@ -744,6 +700,7 @@ const JudgePanel = ({vm}) => {
             <FloatingTutor
                 key={task.code}
                 minimized={tutorMinimized}
+                mode={tutorMode}
                 open={tutorOpen}
                 onClose={handleTutorClose}
                 onMinimize={handleTutorMinimize}
@@ -751,14 +708,13 @@ const JudgePanel = ({vm}) => {
             >
                 <TutorTab
                     apiKey={tutorApiKey}
+                    connection={tutorConnection}
                     grading={grading.taskCode === task.code ? grading : null}
                     key={task.code}
                     mode={tutorMode}
                     task={task}
                     visible={tutorOpen && !tutorMinimized}
                     vm={vm}
-                    onKeyChange={handleTutorKeyChange}
-                    onModeChange={handleTutorModeChange}
                 />
             </FloatingTutor>
         </React.Fragment>
