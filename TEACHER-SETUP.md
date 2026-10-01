@@ -33,7 +33,7 @@ Windows 請用 `npm.cmd`；macOS／Linux 用 `npm`。如果下載 ZIP，解壓�
 
 本平台真實導師使用的 NMKING 服務，可透過[生生有Token－AI額度管理平臺介紹頁](https://www.sdc.org.tw/115-118/product/%E7%94%9F%E7%94%9F%E6%9C%89token-ai%E9%A1%8D%E5%BA%A6%E7%AE%A1%E7%90%86%E5%B9%B3%E8%87%BA/)取得額度與金鑰。這是為教育場域設計的雲端平台，教師或學校可統一管理 AI 使用權限、模型、點數池與個人額度、每日／每週使用時段，並有課後報告。
 
-- [試用申請](https://ai.nmking.io/trial)
+- [試用申請](https://ai.nmking.io/trial)、[NMKING API](https://ai.nmking.io/api)
 - [NMKING 平台](https://ai.nmking.io)
 - 有試用與校園付費方案，價格與點數以官方頁面為準；客服 LINE 官方帳號：`@nmkingtw`。
 
