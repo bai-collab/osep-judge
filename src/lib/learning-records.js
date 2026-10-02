@@ -6,7 +6,20 @@ try {
     studentId = window.localStorage.getItem('osepStudentCode') || '';
 } catch (e) { /* 本機儲存可能停用。 */ }
 const validStudentId = value => /^[\p{L}\p{N}_-]{1,40}$/u.test(value);
-const newRecordId = () => crypto.randomUUID();
+// crypto.randomUUID 只在安全來源（https、localhost）提供；區網 http 頁面不是安全來源，
+// 改用各情境都有的 crypto.getRandomValues 組出同格式的 RFC 4122 第 4 版 UUID。
+const createRecordId = cryptoImpl => {
+    if (cryptoImpl && typeof cryptoImpl.randomUUID === 'function') return cryptoImpl.randomUUID();
+    if (!cryptoImpl || typeof cryptoImpl.getRandomValues !== 'function') {
+        throw new Error('此瀏覽器無法產生紀錄編號；本次未記錄。');
+    }
+    const bytes = cryptoImpl.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // 版本 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 變體
+    const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+const newRecordId = () => createRecordId(typeof crypto === 'undefined' ? null : crypto);
 const setStudentId = value => {
     studentId = value;
     try {
@@ -69,6 +82,7 @@ module.exports = {useStudentIdentity,
     setStudentId,
     validStudentId,
     newRecordId,
+    createRecordId,
     captureProgram,
     safeProgram,
     recordingText,

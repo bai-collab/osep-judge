@@ -25,11 +25,13 @@ const setMode = mode => {
     if (mode === 'mock' || mode === 'live') update({mode});
 };
 
-const isLocalTutor = () => typeof window !== 'undefined' && window.location && window.location.protocol === 'http:' &&
-    ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+// 由導師服務本身提供的 http: 頁面（本機 127.0.0.1 或教師機區網位址）才呼叫 API；
+// 一律使用相對路徑 ./api/...，請求只會回到提供此頁的同一來源。GitHub Pages（https:）與 file: 不呼叫。
+const isTutorServicePage = () => typeof window !== 'undefined' && Boolean(window.location) &&
+    window.location.protocol === 'http:' && Boolean(window.location.hostname);
 
 const refreshStatus = () => {
-    if (!isLocalTutor()) {
+    if (!isTutorServicePage()) {
         update({managed: true, aiConfigured: false, statusReady: true});
         return Promise.resolve(connection);
     }
@@ -76,4 +78,4 @@ const useTutorConnection = () => {
     return {...current, setApiKey, setMode, refreshStatus};
 };
 
-module.exports = {useTutorConnection};
+module.exports = {useTutorConnection, isTutorServicePage};

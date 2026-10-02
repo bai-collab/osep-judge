@@ -69,7 +69,11 @@ export function summarize(records) {
             maxScore: row.latestGrade.maxScore, timestamp: row.latestGrade.timestamp} : null,
         latestProgram: row.latestProgram?.id}));
 }
-export function createRecordStore(directory, {sheetClient = null, syncScope = ''} = {}) {
+// 本機紀錄總數上限：到達後一律拒絕新增（不刪舊資料），所有寫入路徑都經過 save。
+export const RECORD_LIMIT = 50000;
+export const isRecordLimitError = error => error?.code === 'RECORD_LIMIT';
+export function createRecordStore(directory, {sheetClient = null, syncScope = '', recordLimit = RECORD_LIMIT} = {}) {
+    const limit = Number.isSafeInteger(recordLimit) && recordLimit > 0 ? recordLimit : RECORD_LIMIT;
     let initialized;
     let tail = Promise.resolve();
     let syncing;
@@ -112,6 +116,7 @@ export function createRecordStore(directory, {sheetClient = null, syncScope = ''
         const existing = records.get(clean.id);
         if (existing && JSON.stringify(cleanRecord(existing)) !== JSON.stringify(clean)) throw new Error('RECORD_ID_CONFLICT');
         if (!existing) {
+            if (records.size >= limit) throw Object.assign(new Error('RECORD_LIMIT'), {code: 'RECORD_LIMIT'});
             const timestamp = imported && Number.isFinite(Date.parse(input.timestamp)) ? input.timestamp : new Date().toISOString();
             const record = {...clean, timestamp};
             await append(eventsFile, record);
@@ -174,5 +179,7 @@ export function createRecordStore(directory, {sheetClient = null, syncScope = ''
         } finally { changingClient = false; }
     };
     return {save, sync, autoSync, setSheetClient, list: async () => {await init(); await tail; return [...records.values()];},
-        status: async () => {await init(); return status();}};
+        status: async () => {await init(); return status();},
+        // 呼叫上游模型前先確認是否已滿，避免付費請求後才發現無法保存。
+        full: async () => {await init(); await tail; return records.size >= limit;}};
 }

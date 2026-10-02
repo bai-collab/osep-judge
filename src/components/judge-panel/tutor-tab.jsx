@@ -8,7 +8,7 @@ import {readTutorEditor} from '../../lib/tutor-editor.js';
 import {groundRelatedBlocks, createTutorBlockHighlight} from '../../lib/tutor-block-highlight.js';
 import LazyScratchBlocks from '../../lib/tw-lazy-scratch-blocks';
 import styles from './tutor.css';
-import {useTutorConnection} from '../../lib/tutor-connection.js';
+import {useTutorConnection, isTutorServicePage} from '../../lib/tutor-connection.js';
 import {useStudentIdentity, validStudentId, newRecordId,
     safeProgram, recordingText} from '../../lib/learning-records.js';
 
@@ -31,8 +31,8 @@ export const TutorTab = ({task, vm, grading, apiKey, mode, toolboxXML, visible =
     const [highlightTargets, setHighlightTargets] = useState([]);
     const [highlightTurn, setHighlightTurn] = useState(null);
     const [highlightStatus, setHighlightStatus] = useState(null);
-    const local = window.location.protocol === 'http:' &&
-        ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+    // 本機或教師機區網的導師服務頁（http: 同來源）才可求助；GitHub Pages（https:）不呼叫 API。
+    const local = isTutorServicePage();
 
     useEffect(() => () => {
         if (requestRef.current) requestRef.current.abort();
@@ -82,7 +82,7 @@ export const TutorTab = ({task, vm, grading, apiKey, mode, toolboxXML, visible =
         if (running) return;
         setError('');
         if (!local) {
-            setError('請從本機導師服務網址開啟；直接開檔或公開網站不會呼叫 API。');
+            setError('請從導師服務網址（本機或教師提供的區網網址）開啟；直接開檔或公開網站不會呼叫 API。');
             return;
         }
         if (!question.trim()) {
@@ -134,7 +134,8 @@ export const TutorTab = ({task, vm, grading, apiKey, mode, toolboxXML, visible =
                 throw new Error('目前網址沒有導師後端；請用 npm run tutor:serve 啟動後開啟 8612 的網頁。');
             }
             const data = await response.json();
-            if (!recordWarning) setRecordStatus(recordingText(data.recording));
+            const recordLimit = data.code === 'RECORD_LIMIT' || (data.recording && data.recording.status === 'limit');
+            if (!recordWarning) setRecordStatus(recordLimit ? '紀錄已達上限，請教師處理。' : recordingText(data.recording));
             if (!response.ok) throw new Error(data.error || '導師請求沒有完成。');
             if (typeof data.guidance !== 'string' || typeof data.question !== 'string' ||
                 !['mock', 'nmking'].includes(data.source)) throw new Error('導師回覆格式不完整。');
@@ -193,7 +194,7 @@ export const TutorTab = ({task, vm, grading, apiKey, mode, toolboxXML, visible =
                     {observation && observation.omitted > 0 && <p>細節省略 {observation.omitted} 個，仍提供種類統計。</p>}
                 </div>
             </div>
-            {!local && <p role="alert">請從本機服務網址開啟此頁面使用導師。</p>}
+            {!local && <p role="alert">請從導師服務網址（本機或教師提供的區網網址）開啟此頁面使用導師。</p>}
             <div
                 className={styles.conversation}
                 aria-label="導師對話紀錄"
