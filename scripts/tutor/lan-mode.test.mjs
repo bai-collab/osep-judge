@@ -8,8 +8,10 @@ import net from 'node:net';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
+import {PassThrough} from 'node:stream';
+import {EventEmitter} from 'node:events';
 import {createTutorServer, startTutor, selectLanAddress, isPrivateLanIPv4, lanReadiness, classifyLanIPv4,
-    resolveLanAddress, lanBanner,
+    resolveLanAddress, lanBanner, readLaunchMode, LAN_COUNTDOWN_MS,
     ENTRY_LIMIT_PER_IP, LIVE_LIMIT_PER_IP, LIVE_LIMIT_GLOBAL, LIVE_CONCURRENCY, RATE_WINDOW_MS,
     REQUEST_TIMEOUT_MS, HEADERS_TIMEOUT_MS, MAX_CONNECTIONS} from './server.mjs';
 import {createTeacherSettings} from './teacher-settings.mjs';
@@ -46,6 +48,12 @@ async function directory(t) {
         await fs.rm(dir, {recursive: true, force: true});
     });
     return dir;
+}
+// 每次 startTutor 都注入暫存的選擇檔、釘選檔與輸出，絕不碰真正的 local-data。
+async function isolated(t) {
+    const dir = await directory(t);
+    return {launchModeFile: path.join(dir, 'launch-mode.json'), lanPinFile: path.join(dir, 'lan-address.json'),
+        output: {write: () => true}, interactive: false};
 }
 async function settingsFor(dir, {initialize = true, key = aiKey} = {}) {
     const teacherSettings = await createTeacherSettings(path.join(dir, 'teacher-settings.json'));
@@ -194,7 +202,7 @@ test('兩個監聽器共用同一個 updatingSettings：本機保存設定期間
     socket.write(`POST /api/teacher/settings HTTP/1.1\r\nHost: 127.0.0.1:${p.localPort}\r\nOrigin: ${p.localBase}\r\n` +
         `Content-Type: application/json\r\nCookie: ${cookie}\r\nContent-Length: ${Buffer.byteLength(payload)}\r\nConnection: close\r\n\r\n` +
         payload.slice(0, 5));
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal((await p.post(p.lanBase, '/api/tutor', {mode: 'mock', context, question: '可以嗎？'})).status, 409);
     socket.write(payload.slice(5));
     await closed;
@@ -371,13 +379,13 @@ test('A5 未初始化或未設 AI 金鑰時，區網啟動被拒且沒有任何�
     const port = await freePort();
     const env = {TUTOR_LAN: '1', TUTOR_PORT: String(port)};
     const uninitialized = await settingsFor(await directory(t), {initialize: false});
-    await assert.rejects(startTutor({env, interfaces: oneLan, teacherSettings: uninitialized, buildDir: fixtureDir}),
+    await assert.rejects(startTutor({...await isolated(t), env, interfaces: oneLan, teacherSettings: uninitialized, buildDir: fixtureDir}),
         error => error.code === 'TUTOR_START_REFUSED' && error.reasons.some(r => r.includes('尚未完成教師設定')));
     const noKey = await settingsFor(await directory(t), {key: ''});
     assert.equal(noKey.status().initialized, true);
-    await assert.rejects(startTutor({env, interfaces: oneLan, teacherSettings: noKey, buildDir: fixtureDir}),
+    await assert.rejects(startTutor({...await isolated(t), env, interfaces: oneLan, teacherSettings: noKey, buildDir: fixtureDir}),
         error => error.code === 'TUTOR_START_REFUSED' && error.reasons.some(r => r.includes('尚未設定 AI 金鑰')));
-    await assert.rejects(startTutor({env, interfaces: oneLan, teacherSettings: null, buildDir: fixtureDir}),
+    await assert.rejects(startTutor({...await isolated(t), env, interfaces: oneLan, teacherSettings: null, buildDir: fixtureDir}),
         error => error.code === 'TUTOR_START_REFUSED');
     assert.deepEqual(lanReadiness(null).length, 1);
     assert.equal(await portIsFree(port), true);
@@ -385,7 +393,7 @@ test('A5 未初始化或未設 AI 金鑰時，區網啟動被拒且沒有任何�
     assert.throws(() => createTutorServer({lan: {address: '192.168.1.23'}}), /LAN_REQUIRES_TEACHER_SETTINGS/);
     // 條件齊全但區網位址無法綁定（本機沒有此位址）時同樣拒絕，並關閉已開的本機監聽。
     const ready = await settingsFor(await directory(t));
-    await assert.rejects(startTutor({env: {...env, TUTOR_LAN_IP: '192.168.250.251'},
+    await assert.rejects(startTutor({...await isolated(t), env: {...env, TUTOR_LAN_IP: '192.168.250.251'},
         interfaces: {'乙太網路': [{address: '192.168.250.251', family: 'IPv4', internal: false}]},
         teacherSettings: ready, buildDir: fixtureDir}),
     error => error.code === 'TUTOR_START_REFUSED' && error.message.includes('192.168.250.251'));
@@ -396,7 +404,7 @@ test('A5 未初始化或未設 AI 金鑰時，區網啟動被拒且沒有任何�
     }
     assert.equal(freed, true);
     // 未設 TUTOR_LAN：只開本機監聽器，行為同現狀。
-    const local = await startTutor({env: {TUTOR_PORT: String(port)}, teacherSettings: uninitialized, buildDir: fixtureDir});
+    const local = await startTutor({...await isolated(t), env: {TUTOR_PORT: String(port)}, teacherSettings: uninitialized, buildDir: fixtureDir});
     t.after(() => closeServer(local.server));
     assert.equal(local.lanServer, null);
     assert.equal(local.server.address().address, '127.0.0.1');
@@ -609,13 +617,13 @@ test('A7\'3 永不綁 0.0.0.0：監聽位址只有 127.0.0.1 與選定位址；�
     const ready = await settingsFor(await directory(t));
     const pinFile = await pinFileFor(t);
     const privatePort = await freePort();
-    const privateRun = await startTutor({env: {TUTOR_LAN: '1', TUTOR_PORT: String(privatePort), TUTOR_LAN_IP: '192.168.1.23'},
+    const privateRun = await startTutor({...await isolated(t), env: {TUTOR_LAN: '1', TUTOR_PORT: String(privatePort), TUTOR_LAN_IP: '192.168.1.23'},
         interfaces: oneLan, teacherSettings: ready, buildDir: fixtureDir, lanPinFile: pinFile, interactive: false});
     t.after(async () => {await closeServer(privateRun.server); await closeServer(privateRun.lanServer);});
     assert.deepEqual(hosts, ['127.0.0.1', '192.168.1.23']);
     assert.equal(privateRun.lanKind, 'private');
     const spy = promptSpy('Y');
-    const publicRun = await startTutor({env: {TUTOR_LAN: '1', TUTOR_PORT: String(await freePort())},
+    const publicRun = await startTutor({...await isolated(t), env: {TUTOR_LAN: '1', TUTOR_PORT: String(await freePort())},
         interfaces: nic('乙太網路', SCHOOL_IP), teacherSettings: ready, buildDir: fixtureDir, lanPinFile: pinFile,
         interactive: true, prompt: spy.fn});
     t.after(async () => {await closeServer(publicRun.server); await closeServer(publicRun.lanServer);});
@@ -847,4 +855,447 @@ test('非安全來源：區網學生頁真實模型求助會帶有效紀錄編�
     assert.equal(saved[0].id, forwarded.learning.id);
     assert.equal(saved[0].studentId, 'A_S01');
     assert.equal(saved[0].source, 'nmking');
+});
+
+// ---- v4：單一啟動檔 start-tutor.cmd＋記住上次選擇（C1–C14 與 v4.3 寫入時機） ----
+const NO_STUDENTS = '學生無法連線，只有這台電腦可用。';
+const lanNic = {'Wi-Fi': [{address: '192.168.1.23', family: 'IPv4', internal: false, cidr: '192.168.1.23/24'}]};
+const homeNic = {'Wi-Fi': [{address: '192.168.1.10', family: 'IPv4', internal: false, cidr: '192.168.1.10/24'}]};
+const schoolNic = {'乙太網路': [{address: SCHOOL_IP, family: 'IPv4', internal: false, cidr: '163.27.45.21/24'}]};
+const REMEMBERED_PRIVATE = {version: 1, mode: 'lan', address: '192.168.1.23', interfaceName: 'Wi-Fi',
+    cidr: '192.168.1.23/24', kind: 'private'};
+const REMEMBERED_SCHOOL = {version: 1, mode: 'lan', address: SCHOOL_IP, interfaceName: '乙太網路',
+    cidr: '163.27.45.21/24', kind: 'public'};
+const PIN_SCHOOL = {version: 1, address: SCHOOL_IP, interfaceName: '乙太網路', confirmedAt: '2026-10-02T00:00:00.000Z'};
+const LOCAL_ONLY = {version: 1, mode: 'local'};
+function fakeClock() {
+    let now = 0, seq = 0;
+    const timers = new Map();
+    return {
+        setTimeout: (fn, ms) => {
+            const id = ++seq;
+            timers.set(id, {fn, at: now + ms});
+            return id;
+        },
+        clearTimeout: id => {timers.delete(id);},
+        advance(ms) {
+            now += ms;
+            for (const [id, timer] of [...timers]) if (timer.at <= now) {timers.delete(id); timer.fn();}
+        },
+        pending: () => timers.size
+    };
+}
+// 記錄每次監聽要求的位址；非回送位址改綁回送隨機埠（測試不開放網路）。failHost 模擬該位址監聽失敗。
+function spyListen(t, {failHost = null} = {}) {
+    const originalListen = http.Server.prototype.listen;
+    const hosts = [];
+    http.Server.prototype.listen = function (port, host, ...rest) {
+        hosts.push(host);
+        if (host === failHost) {
+            process.nextTick(() => this.emit('error', Object.assign(new Error('模擬監聽失敗'), {code: 'EADDRNOTAVAIL'})));
+            return this;
+        }
+        return originalListen.call(this, host === '127.0.0.1' ? port : 0, '127.0.0.1', ...rest);
+    };
+    t.after(() => {http.Server.prototype.listen = originalListen;});
+    return hosts;
+}
+async function launch(t, {interfaces = lanNic, remembered, pin, env = {}, interactive = true, ready = true,
+    launchModeIsDirectory = false} = {}) {
+    const dir = await directory(t);
+    const launchModeFile = path.join(dir, 'launch-mode.json');
+    const lanPinFile = path.join(dir, 'lan-address.json');
+    if (launchModeIsDirectory) await fs.mkdir(launchModeFile);
+    else if (remembered !== undefined) {
+        await fs.writeFile(launchModeFile, typeof remembered === 'string' ? remembered : JSON.stringify(remembered));
+    }
+    if (pin) await fs.writeFile(lanPinFile, JSON.stringify(pin));
+    const teacherSettings = await settingsFor(dir, {initialize: ready});
+    const input = new PassThrough();
+    const signals = new EventEmitter();
+    const clock = fakeClock();
+    let text = '';
+    const output = {write: chunk => {text += chunk; return true;}};
+    const port = await freePort();
+    const promise = startTutor({env: {TUTOR_PORT: String(port), ...env}, interfaces, teacherSettings, buildDir: fixtureDir,
+        launchModeFile, lanPinFile, interactive, input, output, signals, clock});
+    const h = {dir, launchModeFile, lanPinFile, input, signals, clock, port, text: () => text,
+        waitFor: needle => until(() => text.includes(needle)),
+        type: line => input.write(`${line}\n`),
+        file: () => fs.readFile(launchModeFile, 'utf8').catch(() => null),
+        json: async () => JSON.parse(await fs.readFile(launchModeFile, 'utf8')),
+        done: async () => {
+            const result = await promise;
+            if (result.server) t.after(() => closeServer(result.server));
+            if (result.lanServer) t.after(() => closeServer(result.lanServer));
+            return result;
+        }};
+    return h;
+}
+const questionFirst = '要開放給教室學生連線嗎';
+const countdownLan = '秒內輸入 N 並按 Enter';
+const countdownLocal = '秒內輸入 Y 並按 Enter';
+
+test('C1 教師設定未完成：只開本機、不詢問、不讀也不寫選擇檔', async t => {
+    const hosts = spyListen(t);
+    for (const remembered of [undefined, REMEMBERED_PRIVATE]) {
+        hosts.length = 0;
+        const h = await launch(t, {ready: false, remembered});
+        const before = await h.file();
+        const result = await h.done();
+        assert.equal(result.lanServer, null);
+        assert.deepEqual(hosts, ['127.0.0.1']);
+        assert.ok(h.text().includes('完成教師頁設定後重新啟動，就能選擇開放給教室'));
+        assert.ok(h.text().includes(NO_STUDENTS));
+        assert.ok(!h.text().includes('(Y/N)') && !h.text().includes('秒內'));
+        assert.equal(await h.file(), before);
+        assert.equal(h.clock.pending(), 0);
+    }
+});
+
+test('C2 沒有紀錄：Y 開放並記 lan；N 或空白只開本機並記 local；非互動只開本機不寫檔', async t => {
+    const hosts = spyListen(t);
+    let h = await launch(t);
+    await h.waitFor(questionFirst);
+    h.type('Y');
+    let result = await h.done();
+    assert.equal(result.address, '192.168.1.23');
+    assert.deepEqual(hosts, ['127.0.0.1', '192.168.1.23']);
+    assert.deepEqual(await h.json(), REMEMBERED_PRIVATE);
+    assert.ok(h.text().includes('區網模式已啟動：私人網段位址 192.168.1.23'));
+    assert.ok(h.text().includes(`學生網址：http://192.168.1.23:${h.port}/editor.html?turbo`));
+    for (const answer of ['n', '', 'NO']) {
+        hosts.length = 0;
+        h = await launch(t);
+        await h.waitFor(questionFirst);
+        h.type(answer);
+        result = await h.done();
+        assert.equal(result.lanServer, null, answer);
+        assert.deepEqual(hosts, ['127.0.0.1']);
+        assert.deepEqual(await h.json(), LOCAL_ONLY, `首次選「${answer}」後記 local`);
+        assert.ok(h.text().includes(NO_STUDENTS));
+    }
+    hosts.length = 0;
+    h = await launch(t, {interactive: false});
+    result = await h.done();
+    assert.equal(result.lanServer, null);
+    assert.deepEqual(hosts, ['127.0.0.1']);
+    assert.equal(await h.file(), null);
+    assert.ok(!h.text().includes(questionFirst));
+    assert.ok(h.text().includes('不是互動視窗') && h.text().includes(NO_STUDENTS));
+});
+
+test('C3 記住 lan（同位置）：逾時開放、n 改記 local；記住 local：逾時只開本機、y 開放並記 lan', async t => {
+    const hosts = spyListen(t);
+    let h = await launch(t, {remembered: REMEMBERED_PRIVATE});
+    await h.waitFor(countdownLan);
+    assert.ok(h.text().includes('已記住：開放給教室（192.168.1.23，Wi-Fi）'));
+    h.clock.advance(LAN_COUNTDOWN_MS);
+    let result = await h.done();
+    assert.equal(result.address, '192.168.1.23');
+    assert.deepEqual(hosts, ['127.0.0.1', '192.168.1.23']);
+    assert.deepEqual(await h.json(), REMEMBERED_PRIVATE);
+    assert.ok(h.text().includes('學生網址：http://192.168.1.23:'));
+    hosts.length = 0;
+    h = await launch(t, {remembered: REMEMBERED_PRIVATE});
+    await h.waitFor(countdownLan);
+    h.type('n');
+    result = await h.done();
+    assert.equal(result.lanServer, null);
+    assert.deepEqual(hosts, ['127.0.0.1']);
+    assert.deepEqual(await h.json(), LOCAL_ONLY);
+    assert.ok(h.text().includes(NO_STUDENTS));
+    hosts.length = 0;
+    h = await launch(t, {remembered: LOCAL_ONLY});
+    await h.waitFor(countdownLocal);
+    const localBefore = await h.file();
+    h.clock.advance(LAN_COUNTDOWN_MS);
+    result = await h.done();
+    assert.equal(result.lanServer, null);
+    assert.deepEqual(hosts, ['127.0.0.1']);
+    assert.equal(await h.file(), localBefore);
+    hosts.length = 0;
+    h = await launch(t, {remembered: LOCAL_ONLY});
+    await h.waitFor(countdownLocal);
+    h.type('y');
+    result = await h.done();
+    assert.equal(result.address, '192.168.1.23');
+    assert.deepEqual(await h.json(), REMEMBERED_PRIVATE);
+    assert.ok(h.text().includes('學生網址：http://192.168.1.23:'));
+});
+
+test('C3 倒數結束後，緊接著的 v3 公開位址確認讀得到 Y 並完成釘選；已釘選的學校位址不按鍵即自動開放', async t => {
+    const hosts = spyListen(t);
+    let h = await launch(t, {interfaces: schoolNic, remembered: REMEMBERED_SCHOOL});
+    await h.waitFor(countdownLan);
+    h.clock.advance(LAN_COUNTDOWN_MS);
+    await h.waitFor('確認目前在學校網路內並記住這個位址？(Y/N)');
+    h.type('Y');
+    let result = await h.done();
+    assert.equal(result.address, SCHOOL_IP);
+    assert.equal(JSON.parse(await fs.readFile(h.lanPinFile, 'utf8')).address, SCHOOL_IP);
+    assert.deepEqual(await h.json(), REMEMBERED_SCHOOL);
+    assert.ok(h.text().includes('學校公開網段位址 163.27.45.21') && h.text().includes('行動數據'));
+    // 使用者學校現況：已釘選＋記住 lan → 倒數逾時直接開放，不再詢問。
+    hosts.length = 0;
+    h = await launch(t, {interfaces: schoolNic, remembered: REMEMBERED_SCHOOL, pin: PIN_SCHOOL});
+    await h.waitFor(countdownLan);
+    h.clock.advance(LAN_COUNTDOWN_MS);
+    result = await h.done();
+    assert.equal(result.address, SCHOOL_IP);
+    assert.deepEqual(hosts, ['127.0.0.1', SCHOOL_IP]);
+    assert.ok(!h.text().includes('確認目前在學校網路內'));
+});
+
+test('C4 記住學校位址但網卡只有家用 192.168.1.10：非互動／空白只開本機；y 才開放並記新位址', async t => {
+    const hosts = spyListen(t);
+    let h = await launch(t, {interfaces: homeNic, remembered: REMEMBERED_SCHOOL, pin: PIN_SCHOOL, interactive: false});
+    let before = await h.file();
+    let result = await h.done();
+    assert.equal(result.lanServer, null);
+    assert.deepEqual(hosts, ['127.0.0.1']);
+    assert.equal(await h.file(), before);
+    assert.ok(h.text().includes(NO_STUDENTS));
+    hosts.length = 0;
+    h = await launch(t, {interfaces: homeNic, remembered: REMEMBERED_SCHOOL, pin: PIN_SCHOOL});
+    await h.waitFor('偵測到新位址 192.168.1.10（Wi-Fi）');
+    assert.equal(h.clock.pending(), 0); // 新位址詢問不倒數，不會自動開放
+    before = await h.file();
+    h.type('');
+    result = await h.done();
+    assert.equal(result.lanServer, null);
+    assert.deepEqual(hosts, ['127.0.0.1']);
+    assert.equal(await h.file(), before);
+    assert.ok(h.text().includes(NO_STUDENTS));
+    hosts.length = 0;
+    h = await launch(t, {interfaces: homeNic, remembered: REMEMBERED_SCHOOL, pin: PIN_SCHOOL});
+    await h.waitFor('偵測到新位址 192.168.1.10');
+    h.type('y');
+    result = await h.done();
+    assert.equal(result.address, '192.168.1.10');
+    assert.deepEqual(hosts, ['127.0.0.1', '192.168.1.10']);
+    assert.deepEqual(await h.json(), {version: 1, mode: 'lan', address: '192.168.1.10', interfaceName: 'Wi-Fi',
+        cidr: '192.168.1.10/24', kind: 'private'});
+});
+
+test('C4 記住 lan 但區網無法使用（多候選、只有排除網段、釘選位址不在網卡）：只開本機、選擇檔位元組不變', async t => {
+    const hosts = spyListen(t);
+    for (const interfaces of [{...lanNic, ...nic('乙太網路', SCHOOL_IP)}, nic('乙太網路', '169.254.3.4')]) {
+        hosts.length = 0;
+        const h = await launch(t, {interfaces, remembered: REMEMBERED_SCHOOL, pin: PIN_SCHOOL});
+        const before = await h.file();
+        const result = await h.done();
+        assert.equal(result.lanServer, null);
+        assert.deepEqual(hosts, ['127.0.0.1']);
+        assert.equal(await h.file(), before);
+        assert.ok(!h.text().includes('(Y/N)') && !h.text().includes('秒內'));
+        assert.ok(h.text().includes('無法開放給教室') && h.text().includes(NO_STUDENTS));
+    }
+    hosts.length = 0;
+    const moved = {'乙太網路': [{address: '163.27.45.99', family: 'IPv4', internal: false, cidr: '163.27.45.99/24'}]};
+    const h = await launch(t, {interfaces: moved, remembered: REMEMBERED_SCHOOL, pin: PIN_SCHOOL});
+    const before = await h.file();
+    await h.waitFor('偵測到新位址 163.27.45.99');
+    h.type('y');
+    const result = await h.done();
+    assert.equal(result.lanServer, null);
+    assert.deepEqual(hosts, ['127.0.0.1']);
+    assert.equal(await h.file(), before);
+    assert.ok(h.text().includes(`已記住的學校位址 ${SCHOOL_IP}`) && h.text().includes(NO_STUDENTS));
+});
+
+test('C5 TUTOR_LAN=1：區網無法使用仍拒絕啟動且不寫檔；成功時記 lan；監聽失敗拒絕且不寫 lan', async t => {
+    spyListen(t, {failHost: '192.168.1.99'});
+    let h = await launch(t, {interfaces: schoolNic, env: {TUTOR_LAN: '1'}, interactive: false});
+    await assert.rejects(h.done(), error => error.code === 'TUTOR_START_REFUSED');
+    assert.equal(await h.file(), null);
+    h = await launch(t, {env: {TUTOR_LAN: '1'}, interactive: false});
+    const result = await h.done();
+    assert.equal(result.address, '192.168.1.23');
+    assert.deepEqual(await h.json(), REMEMBERED_PRIVATE);
+    assert.ok(h.text().includes('學生網址：http://192.168.1.23:'));
+    const failNic = {'Wi-Fi': [{address: '192.168.1.99', family: 'IPv4', internal: false, cidr: '192.168.1.99/24'}]};
+    h = await launch(t, {interfaces: failNic, env: {TUTOR_LAN: '1'}, interactive: false});
+    await assert.rejects(h.done(), error => error.code === 'TUTOR_START_REFUSED' && error.message.includes('192.168.1.99'));
+    assert.equal(await h.file(), null);
+});
+
+test('v4.3 一般路線區網監聽失敗：保留本機、印出原因、不改綁其他位址、不寫 lan', async t => {
+    const hosts = spyListen(t, {failHost: '192.168.1.23'});
+    const h = await launch(t);
+    await h.waitFor(questionFirst);
+    h.type('y');
+    const result = await h.done();
+    assert.equal(result.lanServer, null);
+    assert.ok(result.server.listening);
+    assert.deepEqual(hosts, ['127.0.0.1', '192.168.1.23']);
+    assert.equal(await h.file(), null);
+    assert.ok(h.text().includes('無法監聽 192.168.1.23') && h.text().includes(NO_STUDENTS));
+});
+
+test('C6 選擇檔損壞視同沒有紀錄；寫入為原子操作（不留暫存檔）', async t => {
+    spyListen(t);
+    const h = await launch(t, {remembered: '{broken'});
+    await h.waitFor(questionFirst);
+    h.type('y');
+    await h.done();
+    assert.deepEqual(await h.json(), REMEMBERED_PRIVATE);
+    assert.deepEqual((await fs.readdir(h.dir)).filter(name => name.endsWith('.tmp')), []);
+});
+
+test('C9 倒數中 Ctrl+C（注入的 SIGINT）或輸入串流關閉：中止、沒有任何監聽器、選擇檔不變', async t => {
+    const hosts = spyListen(t);
+    for (const abort of [h => h.signals.emit('SIGINT'), h => h.input.end(), h => h.input.destroy()]) {
+        hosts.length = 0;
+        const h = await launch(t, {remembered: REMEMBERED_PRIVATE});
+        const before = await h.file();
+        await h.waitFor(countdownLan);
+        assert.equal(h.clock.pending(), 1);
+        abort(h);
+        const result = await h.done();
+        assert.deepEqual(result, {aborted: true});
+        h.clock.advance(LAN_COUNTDOWN_MS * 2);
+        await new Promise(resolve => setTimeout(resolve, 30));
+        assert.deepEqual(hosts, []);
+        assert.equal(h.clock.pending(), 0);
+        assert.equal(await h.file(), before);
+        assert.equal(h.signals.listenerCount('SIGINT'), 0);
+    }
+    // v3 公開位址確認時按 Ctrl+C 同樣中止，不寫釘選檔。
+    hosts.length = 0;
+    const h = await launch(t, {interfaces: schoolNic, remembered: REMEMBERED_SCHOOL});
+    await h.waitFor(countdownLan);
+    h.clock.advance(LAN_COUNTDOWN_MS);
+    await h.waitFor('確認目前在學校網路內');
+    h.signals.emit('SIGINT');
+    assert.deepEqual(await h.done(), {aborted: true});
+    assert.deepEqual(hosts, []);
+    assert.equal(await fileExists(h.lanPinFile), false);
+});
+
+test('C10 非互動＋記住 lan：只開本機，選擇檔不變', async t => {
+    const hosts = spyListen(t);
+    for (const [interfaces, remembered, pin] of [[lanNic, REMEMBERED_PRIVATE], [schoolNic, REMEMBERED_SCHOOL, PIN_SCHOOL]]) {
+        hosts.length = 0;
+        const h = await launch(t, {interfaces, remembered, pin, interactive: false});
+        const before = await h.file();
+        const result = await h.done();
+        assert.equal(result.lanServer, null);
+        assert.deepEqual(hosts, ['127.0.0.1']);
+        assert.equal(await h.file(), before);
+    }
+});
+
+test('C11 選擇檔反例一律視同沒有紀錄，不用檔案裡的位址監聽', async t => {
+    const hosts = spyListen(t);
+    const bad = [
+        {...REMEMBERED_PRIVATE, address: '0.0.0.0', kind: 'private'}, {...REMEMBERED_PRIVATE, address: '127.0.0.1'},
+        {...REMEMBERED_PRIVATE, address: 'fe80::1'}, {...REMEMBERED_PRIVATE, mode: 'public'}, {...REMEMBERED_PRIVATE, mode: 'LAN'},
+        {...REMEMBERED_PRIVATE, kind: 'public'}, {...REMEMBERED_PRIVATE, version: 2},
+        {...REMEMBERED_PRIVATE, interfaceName: 'x'.repeat(129)}, {...REMEMBERED_PRIVATE, interfaceName: 7},
+        (({cidr, ...rest}) => rest)(REMEMBERED_PRIVATE), [REMEMBERED_PRIVATE], 'null', '"lan"'
+    ];
+    const dir = await directory(t);
+    for (const [index, content] of bad.entries()) {
+        const file = path.join(dir, `bad-${index}.json`);
+        await fs.writeFile(file, typeof content === 'string' ? content : JSON.stringify(content));
+        assert.equal(await readLaunchMode(file), null, JSON.stringify(content));
+    }
+    assert.equal(await readLaunchMode(dir), null); // 路徑是資料夾
+    for (const options of [{remembered: bad[0]}, {remembered: bad[1]}, {remembered: bad[2]}, {remembered: bad[3]},
+        {launchModeIsDirectory: true}]) {
+        hosts.length = 0;
+        const h = await launch(t, options);
+        const before = await h.file();
+        await h.waitFor(questionFirst); // 視同沒有紀錄：首次詢問，不倒數
+        assert.equal(h.clock.pending(), 0);
+        h.type('ㄙ');
+        const result = await h.done();
+        assert.equal(result.lanServer, null);
+        assert.deepEqual(hosts, ['127.0.0.1']);
+        assert.equal(await h.file(), before);
+    }
+    // 合法但不同的記住位址：監聽位址只來自本次選位（192.168.1.23），不是檔案裡的 192.168.1.50。
+    hosts.length = 0;
+    const h = await launch(t, {remembered: {...REMEMBERED_PRIVATE, address: '192.168.1.50', cidr: '192.168.1.50/24'}});
+    await h.waitFor('偵測到新位址 192.168.1.23');
+    h.type('y');
+    await h.done();
+    assert.deepEqual(hosts, ['127.0.0.1', '192.168.1.23']);
+});
+
+test('C12 輸入「ㄙ」或全形「ｎ」：只開本機，紀錄不變（NFKC 後保守解讀）', async t => {
+    const hosts = spyListen(t);
+    for (const [remembered, prompt] of [[REMEMBERED_PRIVATE, countdownLan], [LOCAL_ONLY, countdownLocal], [undefined, questionFirst]]) {
+        for (const answer of ['ㄙ', 'ｎ', 'ｎｏ', 'maybe']) {
+            hosts.length = 0;
+            const h = await launch(t, {remembered});
+            const before = await h.file();
+            await h.waitFor(prompt);
+            h.type(answer);
+            const result = await h.done();
+            assert.equal(result.lanServer, null, `${prompt} ${answer}`);
+            assert.deepEqual(hosts, ['127.0.0.1']);
+            assert.equal(await h.file(), before, `${prompt} ${answer}`);
+        }
+    }
+    // NFKC：全形「Ｙ」視同 y。
+    const h = await launch(t, {remembered: LOCAL_ONLY});
+    await h.waitFor(countdownLocal);
+    h.type(' Ｙ ');
+    assert.equal((await h.done()).address, '192.168.1.23');
+});
+
+test('C13 記住 lan 但介面名稱或 cidr 不同：改為詢問，不倒數、不自動開放', async t => {
+    const hosts = spyListen(t);
+    for (const remembered of [{...REMEMBERED_PRIVATE, interfaceName: '乙太網路 2'}, {...REMEMBERED_PRIVATE, cidr: '192.168.1.23/16'}]) {
+        hosts.length = 0;
+        const h = await launch(t, {remembered});
+        const before = await h.file();
+        await h.waitFor('偵測到新位址 192.168.1.23（Wi-Fi）');
+        assert.ok(!h.text().includes('秒內'));
+        assert.equal(h.clock.pending(), 0);
+        h.type('');
+        const result = await h.done();
+        assert.equal(result.lanServer, null);
+        assert.deepEqual(hosts, ['127.0.0.1']);
+        assert.equal(await h.file(), before);
+    }
+    // v3 釘選檔：同位址但介面名稱不同，視同未釘選，需重新確認。
+    hosts.length = 0;
+    const h = await launch(t, {interfaces: schoolNic, remembered: REMEMBERED_SCHOOL,
+        pin: {...PIN_SCHOOL, interfaceName: '乙太網路 2'}});
+    await h.waitFor(countdownLan);
+    h.clock.advance(LAN_COUNTDOWN_MS);
+    await h.waitFor('確認目前在學校網路內');
+    h.type('N');
+    const result = await h.done();
+    assert.equal(result.lanServer, null);
+    assert.deepEqual(hosts, ['127.0.0.1']);
+});
+
+test('C14 一般路線忽略 TUTOR_LAN_IP 並提示；監聽位址來自自動選位', async t => {
+    const hosts = spyListen(t);
+    let h = await launch(t, {env: {TUTOR_LAN_IP: '10.0.0.99'}, interactive: false});
+    await h.done();
+    assert.ok(h.text().includes('TUTOR_LAN_IP 只在 start-tutor-lan.cmd（TUTOR_LAN=1）時有效，這次忽略'));
+    assert.deepEqual(hosts, ['127.0.0.1']);
+    hosts.length = 0;
+    h = await launch(t, {env: {TUTOR_LAN_IP: '10.0.0.99'}});
+    await h.waitFor(questionFirst);
+    h.type('y');
+    await h.done();
+    assert.deepEqual(hosts, ['127.0.0.1', '192.168.1.23']);
+});
+
+test('v4 提問前多打的行不算回答（避免殘留的 Enter 誤觸）', async t => {
+    const hosts = spyListen(t);
+    const h = await launch(t, {remembered: LOCAL_ONLY});
+    h.type('y'); // 在提問之前送出
+    await h.waitFor(countdownLocal);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    h.clock.advance(LAN_COUNTDOWN_MS);
+    const result = await h.done();
+    assert.equal(result.lanServer, null);
+    assert.deepEqual(hosts, ['127.0.0.1']);
 });

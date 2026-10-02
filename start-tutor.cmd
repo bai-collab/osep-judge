@@ -1,25 +1,20 @@
 @echo off
+rem osep-judge launcher (local, or classroom LAN after the teacher chooses). Keep this file ASCII-only: cmd mis-parses multibyte lines under chcp 65001.
+rem All guidance text is printed by Node (scripts\tutor\server.mjs).
+setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
 where node >nul 2>nul
 if errorlevel 1 (
-  echo 找不到 Node。請教師先準備 Node，再啟動本機導師。
+  echo [osep-judge] Node.js not found. Please install Node.js 22 LTS from https://nodejs.org/ and run this file again.
   pause
   exit /b 1
 )
-node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 22 ? 0 : 1)"
+node -e "if (Number(process.versions.node.split('.')[0]) < 22) { console.log('Node \u7248\u672c\u592a\u820a\u3002\u8acb\u6559\u5e2b\u5b89\u88dd Node.js 22 \u4ee5\u4e0a\uff08https://nodejs.org/ \u9078 LTS \u7248\uff09\uff0c\u518d\u555f\u52d5\u672c\u6a5f\u5c0e\u5e2b\u3002'); process.exit(1); }"
 if errorlevel 1 (
-  echo Node 版本太舊。請教師使用 Node 22 或更新版本，再啟動本機導師。
   pause
   exit /b 1
 )
-if not exist "build\editor.html" (
-  echo 找不到已建置的 build\editor.html。請帶入建置好的專案。
-  pause
-  exit /b 1
-)
-echo 教師設定頁：http://127.0.0.1:8612/teacher.html
-echo 學生頁：http://127.0.0.1:8612/editor.html?turbo
-echo 請保留這個服務視窗；按 Ctrl+C 可停止。
+set "TUTOR_LAN="
 node scripts\tutor\server.mjs
 pause

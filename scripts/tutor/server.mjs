@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import readline from 'node:readline';
 import {fileURLToPath} from 'node:url';
 import {MODEL, sanitizeContext, mockGuidance, requestGuidance} from './provider.mjs';
 import {createRecordStore, isRecordLimitError, RECORD_LIMIT} from './record-store.mjs';
@@ -412,7 +413,8 @@ const listEntries = interfaces => {
     for (const [name, list] of Object.entries(interfaces || {})) {
         for (const item of Array.isArray(list) ? list : []) {
             const family = item?.family === 4 || item?.family === 'IPv4' ? 'IPv4' : 'IPv6';
-            entries.push({name, address: String(item?.address || ''), family, internal: item?.internal === true});
+            entries.push({name, address: String(item?.address || ''), family, internal: item?.internal === true,
+                cidr: typeof item?.cidr === 'string' ? item.cidr : null});
         }
     }
     return entries;
@@ -446,7 +448,8 @@ export function selectLanAddress({requested = '', interfaces = {}} = {}) {
         if (verdict.kind === 'excluded') return {ok: false, reasons: [`TUTOR_LAN_IP=${wanted}：${verdict.reason}，不能用於區網模式。`]};
         const usable = matches.find(e => e.family === 'IPv4' && !e.internal);
         if (!usable) return {ok: false, reasons: [`TUTOR_LAN_IP=${wanted}：這台電腦的網路介面沒有這個位址，請用 ipconfig 確認。`]};
-        return {ok: true, address: wanted, interfaceName: usable.name, kind: verdict.kind, confirmation: 'explicit', reasons: []};
+        return {ok: true, address: wanted, interfaceName: usable.name, cidr: usable.cidr, kind: verdict.kind,
+            confirmation: 'explicit', reasons: []};
     }
     const excluded = [], candidates = [];
     for (const e of entries) {
@@ -457,9 +460,11 @@ export function selectLanAddress({requested = '', interfaces = {}} = {}) {
     if (candidates.length === 1) {
         const [only] = candidates;
         if (only.kind === 'private') {
-            return {ok: true, address: only.address, interfaceName: only.name, kind: 'private', confirmation: 'none', reasons: excluded};
+            return {ok: true, address: only.address, interfaceName: only.name, cidr: only.cidr, kind: 'private',
+                confirmation: 'none', reasons: excluded};
         }
-        return {ok: false, needsConfirmation: true, address: only.address, interfaceName: only.name, kind: 'public', reasons: excluded};
+        return {ok: false, needsConfirmation: true, address: only.address, interfaceName: only.name, cidr: only.cidr,
+            kind: 'public', reasons: excluded};
     }
     const head = candidates.length ? `找到 ${candidates.length} 個可能的區網位址，無法自動判斷要用哪一個：` :
         '找不到可用的區網位址：';
@@ -469,19 +474,22 @@ export function selectLanAddress({requested = '', interfaces = {}} = {}) {
 }
 
 export const LAN_PIN_FILE = path.join(root, 'local-data', 'lan-address.json');
+// 釘選檔只用來「比對」，不提供監聽位址。讀取失敗（資料夾、無權限等）或內容不合格，一律視同未釘選。
+const validName = value => typeof value === 'string' && value.length > 0 && value.length <= 128;
 const readPin = async file => {
     let raw;
     try { raw = await fsp.readFile(file, 'utf8'); } catch (error) {
-        if (error.code === 'ENOENT') return null;
-        throw error;
+        return error?.code === 'ENOENT' ? null : {invalid: true};
     }
     try {
         const value = JSON.parse(raw);
-        if (value?.version === 1 && classifyLanIPv4(value.address).kind === 'public') return value;
+        if (value?.version === 1 && classifyLanIPv4(value.address).kind === 'public' && validName(value.interfaceName)) {
+            return {address: value.address, interfaceName: value.interfaceName};
+        }
     } catch { /* 損壞的釘選檔視同未釘選，仍須重新確認。 */ }
     return {invalid: true};
 };
-const writePin = async (file, data) => {
+const writeJsonAtomic = async (file, data) => {
     await fsp.mkdir(path.dirname(file), {recursive: true});
     const temp = `${file}.${randomBytes(8).toString('hex')}.tmp`;
     const handle = await fsp.open(temp, 'wx', 0o600);
@@ -507,8 +515,11 @@ export async function resolveLanAddress({requested = '', interfaces = {}, pinFil
     if (selected.ok || !selected.needsConfirmation) return selected;
     const {address, interfaceName} = selected;
     const pin = await readPin(pinFile);
-    if (pin && !pin.invalid) {
-        if (pin.address === address) return {...selected, ok: true, needsConfirmation: false, confirmation: 'pinned'};
+    // 位址與介面名稱都相同才算已釘選；同位址但換了介面，視同未釘選，須重新確認。
+    if (pin && !pin.invalid && pin.address === address && pin.interfaceName === interfaceName) {
+        return {...selected, ok: true, needsConfirmation: false, confirmation: 'pinned'};
+    }
+    if (pin && !pin.invalid && pin.address !== address) {
         return {ok: false, reasons: [
             `已記住的學校位址 ${pin.address} 目前不在這台電腦的網路介面上（現在偵測到 ${address}，介面 ${interfaceName}）。`,
             '不自動改用其他公開位址。若確定已換到另一個學校網路，請刪除 local-data/lan-address.json 後重新啟動並再次確認，或以 TUTOR_LAN_IP 指定。',
@@ -517,14 +528,14 @@ export async function resolveLanAddress({requested = '', interfaces = {}, pinFil
     if (!interactive) {
         return {ok: false, reasons: [
             `偵測到 ${address}（介面 ${interfaceName}）是學校／公開網段位址，需要教師在啟動視窗確認一次。`,
-            '目前不是互動式視窗，無法詢問；請雙擊 start-tutor-lan.cmd 啟動，或以 TUTOR_LAN_IP 指定這個位址。', ...selected.reasons]};
+            '目前不是互動式視窗，無法詢問；請雙擊 start-tutor.cmd 啟動，或以 start-tutor-lan.cmd 搭配 TUTOR_LAN_IP 指定這個位址。', ...selected.reasons]};
     }
     const answer = await prompt(`偵測到 ${address}（${interfaceName}）是學校／公開網段位址。確認目前在學校網路內並記住這個位址？(Y/N) `);
     if (!/^\s*y(?:es)?\s*$/i.test(String(answer ?? ''))) {
         return {ok: false, reasons: [`教師未確認使用 ${address}，區網模式不啟動。`, ...selected.reasons]};
     }
     try {
-        await writePin(pinFile, {version: 1, address, interfaceName, confirmedAt: new Date().toISOString()});
+        await writeJsonAtomic(pinFile, {version: 1, address, interfaceName, confirmedAt: new Date().toISOString()});
     } catch {
         return {ok: false, reasons: ['無法寫入 local-data/lan-address.json，區網模式不啟動；請確認資料夾可寫入。']};
     }
@@ -574,53 +585,258 @@ const listenOn = (server, port, address) => new Promise((resolve, reject) => {
     server.listen(port, address);
 });
 
-/** 依環境變數啟動；TUTOR_LAN=1 時另開區網監聽器，條件不符一律拒絕啟動（不降級成部分開放）。 */
+// ---- v4：單一啟動檔＋記住上次選擇（local-data/launch-mode.json） ----
+export const LAUNCH_MODE_FILE = path.join(root, 'local-data', 'launch-mode.json');
+export const LAN_COUNTDOWN_MS = 5000;
+const REMEMBERED_FIELDS = ['address', 'interfaceName', 'cidr', 'kind'];
+/**
+ * 讀取上次選擇；只用來比對，絕不當成監聽位址。任何讀取錯誤（不存在、資料夾、無權限）
+ * 或內容不合格（版本、模式、位址屬排除網段、kind 與位址不符、介面名稱、cidr）一律回傳 null（視同沒有紀錄）。
+ */
+export async function readLaunchMode(file) {
+    let raw;
+    try { raw = await fsp.readFile(file, 'utf8'); } catch { return null; }
+    let value;
+    try { value = JSON.parse(raw); } catch { return null; }
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== 1) return null;
+    if (value.mode === 'local') return {version: 1, mode: 'local'};
+    if (value.mode !== 'lan') return null;
+    const verdict = classifyLanIPv4(value.address);
+    if (verdict.kind === 'excluded' || value.kind !== verdict.kind || !validName(value.interfaceName)) return null;
+    if (value.cidr !== null && (typeof value.cidr !== 'string' || value.cidr.length > 64)) return null;
+    return {version: 1, mode: 'lan', address: value.address, interfaceName: value.interfaceName, cidr: value.cidr,
+        kind: value.kind};
+}
+// 先 NFKC 再去空白、轉小寫。「是」以正規化後的 y/yes 判斷；只有原樣輸入半形 n/no 才算明確選否並改寫紀錄，
+// 其他任何輸入（含全形ｎ、注音）只開本機且不改紀錄（保守解讀）。
+const interpret = answer => {
+    const text = String(answer ?? '');
+    const normalized = text.normalize('NFKC').trim().toLowerCase();
+    const plain = text.trim().toLowerCase();
+    if (normalized === '') return 'empty';
+    if (normalized === 'y' || normalized === 'yes') return 'yes';
+    if (plain === 'n' || plain === 'no') return 'no';
+    return 'other';
+};
+const ABORTED = Symbol('LAUNCH_ABORTED');
+const defaultClock = {setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: id => clearTimeout(id)};
+/**
+ * 整個啟動決策期間共用一個 readline（terminal:false，需按 Enter）。只有提問之後收到的行才算回答，
+ * 提問前多打的行一律丟棄，避免誤把先前的 Enter 當成回答。Ctrl+C（signals 的 SIGINT）、輸入串流結束或關閉都算中止；
+ * 每次提問只產生一個結果，計時器觸發前先確認尚未有結果。程式自己在最後呼叫 close 不算中止。
+ */
+function createLineAsker({input, output, signals, clock}) {
+    let rl = null, ended = false, waiter = null;
+    const stop = () => {
+        ended = true;
+        if (waiter) waiter({aborted: true});
+    };
+    const ensure = () => {
+        if (rl) return;
+        rl = readline.createInterface({input, terminal: false, crlfDelay: Infinity});
+        rl.on('line', line => {if (waiter) waiter({answer: line});});
+        rl.on('close', stop);
+        input.once('close', stop);
+    };
+    const ask = (question, {timeoutMs = 0} = {}) => new Promise(resolve => {
+        ensure();
+        let settled = false, timer = null;
+        const onSignal = () => finish({aborted: true});
+        function finish(result) {
+            if (settled) return;
+            settled = true;
+            waiter = null;
+            if (timer !== null) clock.clearTimeout(timer);
+            signals.removeListener('SIGINT', onSignal);
+            resolve(result);
+        }
+        if (ended) return finish({aborted: true});
+        signals.once('SIGINT', onSignal);
+        waiter = finish;
+        output.write(question);
+        if (timeoutMs > 0) timer = clock.setTimeout(() => finish({timedOut: true}), timeoutMs);
+    });
+    const close = () => {
+        if (!rl) return;
+        rl.removeListener('close', stop);
+        input.removeListener('close', stop);
+        rl.close();
+    };
+    // 啟動時就開始讀取，讓提問前已在緩衝區的行在沒有提問時被丟棄。
+    ensure();
+    return {ask, close};
+}
+
+/**
+ * 一般路線（start-tutor.cmd）的決策；只回傳要不要嘗試區網，不開任何監聽器。
+ * 回傳 {aborted} 或 {lan: resolved|null, rememberLan, writeLocal, failure: reasons|null}。
+ */
+async function decideLaunch({env, teacherSettings, snapshot, interactive, launchModeFile, pinFile, asker, v3prompt, log,
+    countdownMs}) {
+    const local = (extra = {}) => ({lan: null, rememberLan: false, writeLocal: false, failure: null, ...extra});
+    if (env.TUTOR_LAN_IP) log('提示：TUTOR_LAN_IP 只在 start-tutor-lan.cmd（TUTOR_LAN=1）時有效，這次忽略。');
+    if (lanReadiness(teacherSettings).length) {
+        log('教師設定尚未完成（教師密碼與 AI 金鑰），這次只開本機。完成教師頁設定後重新啟動，就能選擇開放給教室。');
+        return local();
+    }
+    if (!interactive) {
+        log('不是互動視窗，這次只開本機。要開放給教室，請雙擊 start-tutor.cmd；無人值守請改用 start-tutor-lan.cmd。');
+        return local();
+    }
+    const tryLan = async () => {
+        const resolved = await resolveLanAddress({interfaces: snapshot, pinFile, interactive: true, prompt: v3prompt});
+        return resolved.ok ? {lan: resolved, rememberLan: true, writeLocal: false, failure: null} :
+            local({failure: resolved.reasons});
+    };
+    const seconds = Math.round(countdownMs / 1000);
+    const remembered = await readLaunchMode(launchModeFile);
+    if (!remembered) {
+        const reply = await asker.ask('要開放給教室學生連線嗎？輸入 Y 並按 Enter 開放；直接按 Enter 只開本機。(Y/N) ');
+        if (reply.aborted) return {aborted: true};
+        const answer = interpret(reply.answer);
+        if (answer === 'yes') return tryLan();
+        return local({writeLocal: answer === 'no' || answer === 'empty'});
+    }
+    if (remembered.mode === 'local') {
+        const reply = await asker.ask(`已記住：只開本機。${seconds} 秒內輸入 Y 並按 Enter 可開放給教室：`, {timeoutMs: countdownMs});
+        if (reply.aborted) return {aborted: true};
+        if (reply.timedOut) return local();
+        const answer = interpret(reply.answer);
+        if (answer === 'yes') return tryLan();
+        return local({writeLocal: answer === 'no'});
+    }
+    const current = selectLanAddress({interfaces: snapshot});
+    if (!current.ok && !current.needsConfirmation) return local({failure: current.reasons});
+    const same = REMEMBERED_FIELDS.every(key => (current[key] ?? null) === (remembered[key] ?? null));
+    if (same) {
+        const reply = await asker.ask(`已記住：開放給教室（${current.address}，${current.interfaceName}）。` +
+            `${seconds} 秒內輸入 N 並按 Enter 可改成只開本機：`, {timeoutMs: countdownMs});
+        if (reply.aborted) return {aborted: true};
+        if (reply.timedOut) return tryLan();
+        const answer = interpret(reply.answer);
+        if (answer === 'empty' || answer === 'yes') return tryLan();
+        return local({writeLocal: answer === 'no'});
+    }
+    const reply = await asker.ask(`偵測到新位址 ${current.address}（${current.interfaceName}），要開放給教室嗎？` +
+        '輸入 Y 並按 Enter 開放；直接按 Enter 只開本機。(Y/N) ');
+    if (reply.aborted) return {aborted: true};
+    const answer = interpret(reply.answer);
+    if (answer === 'yes') return tryLan();
+    return local({writeLocal: answer === 'no'});
+}
+
+const localLines = port => [`本機解題導師：http://127.0.0.1:${port}/editor.html?turbo`,
+    `教師設定頁（只能在這台電腦開）：http://127.0.0.1:${port}/teacher.html`, '請保留這個服務視窗；按 Ctrl+C 可停止。'];
+const NO_STUDENTS = '學生無法連線，只有這台電腦可用。';
+
+/**
+ * 啟動服務。一般路線（start-tutor.cmd）：依教師設定與上次選擇決定只開本機或同時開放教室，區網無法使用時退回只開本機。
+ * TUTOR_LAN=1（start-tutor-lan.cmd）：視同這次選開放並記住；區網無法使用時拒絕啟動（v2/v3 相容）。
+ * 所有詢問都在開任何監聽器之前完成；中止時回傳 {aborted: true}，不開任何監聽器。網卡資訊只取一次快照，全程共用。
+ */
 export async function startTutor({env = process.env, interfaces = null, teacherSettings, recordStore,
-    lanPinFile = LAN_PIN_FILE, interactive = process.stdin.isTTY === true, prompt = defaultPrompt, ...options} = {}) {
+    lanPinFile = LAN_PIN_FILE, launchModeFile = LAUNCH_MODE_FILE, interactive = process.stdin.isTTY === true,
+    prompt = null, input = process.stdin, output = process.stdout, signals = process, clock = defaultClock,
+    countdownMs = LAN_COUNTDOWN_MS, ...options} = {}) {
     const port = Number(env.TUTOR_PORT || 8612);
     if (!Number.isInteger(port) || port < 1024 || port > 65535) throw startError('TUTOR_PORT 必須介於 1024 與 65535。');
-    let lan = null, selected = null;
-    if (env.TUTOR_LAN === '1') {
-        const reasons = lanReadiness(teacherSettings);
-        if (reasons.length) throw startError('區網模式拒絕啟動。', reasons);
-        selected = await resolveLanAddress({requested: env.TUTOR_LAN_IP, interfaces: interfaces || os.networkInterfaces(),
-            pinFile: lanPinFile, interactive, prompt});
-        if (!selected.ok) throw startError('區網模式拒絕啟動：無法確定教師機的區網位址。', selected.reasons);
-        lan = {address: selected.address};
+    const log = line => output.write(`${line}\n`);
+    const strict = env.TUTOR_LAN === '1';
+    const snapshot = interfaces || os.networkInterfaces();
+    const asker = interactive && (!strict || !prompt) ? createLineAsker({input, output, signals, clock}) : null;
+    const v3prompt = prompt || (async question => {
+        const reply = await asker.ask(question);
+        if (reply.aborted) throw ABORTED;
+        return reply.answer;
+    });
+    let plan;
+    try {
+        if (strict) {
+            const reasons = lanReadiness(teacherSettings);
+            if (reasons.length) throw startError('區網模式拒絕啟動。', reasons);
+            const selected = await resolveLanAddress({requested: env.TUTOR_LAN_IP, interfaces: snapshot, pinFile: lanPinFile,
+                interactive, prompt: v3prompt});
+            if (!selected.ok) throw startError('區網模式拒絕啟動：無法確定教師機的區網位址。', selected.reasons);
+            plan = {lan: selected, rememberLan: true, writeLocal: false, failure: null};
+        } else {
+            try {
+                plan = await decideLaunch({env, teacherSettings, snapshot, interactive, launchModeFile, pinFile: lanPinFile,
+                    asker, v3prompt, log, countdownMs});
+            } catch (error) {
+                if (error === ABORTED) throw error;
+                plan = {lan: null, rememberLan: false, writeLocal: false, failure: ['判斷區網位址時發生錯誤。']};
+            }
+        }
+    } catch (error) {
+        if (error === ABORTED) return {aborted: true};
+        throw error;
+    } finally {
+        asker?.close();
     }
+    if (plan.aborted) return {aborted: true};
+    // 監聽位址只來自本次選位結果（selectLanAddress／resolveLanAddress），不取自任何檔案。
+    const lan = plan.lan ? {address: plan.lan.address} : null;
     const server = createTutorServer({...options, recordStore, teacherSettings, lan});
     await listenOn(server, port, '127.0.0.1');
+    let lanServer = null, failure = plan.failure;
     if (server.lanServer) {
-        try { await listenOn(server.lanServer, port, lan.address); } catch (error) {
-            server.close();
-            throw startError(`區網模式拒絕啟動：無法監聽 ${lan.address}:${port}（${error.code || '未知錯誤'}）。`);
+        try {
+            await listenOn(server.lanServer, port, lan.address);
+            lanServer = server.lanServer;
+        } catch (error) {
+            if (strict) {
+                server.close();
+                throw startError(`區網模式拒絕啟動：無法監聽 ${lan.address}:${port}（${error.code || '未知錯誤'}）。`);
+            }
+            failure = [`無法監聽 ${lan.address}:${port}（${error.code || '未知錯誤'}），不改用其他位址。`];
         }
     }
-    return {server, lanServer: server.lanServer || null, port, address: lan?.address || null,
-        lanKind: selected?.kind || null, interfaceName: selected?.interfaceName || null};
+    const remember = async data => {
+        try { await writeJsonAtomic(launchModeFile, data); } catch { log('警告：無法記住這次的選擇（local-data/launch-mode.json 無法寫入）；下次啟動會再詢問。'); }
+    };
+    if (lanServer && plan.rememberLan) {
+        await remember({version: 1, mode: 'lan', address: plan.lan.address, interfaceName: plan.lan.interfaceName,
+            cidr: plan.lan.cidr ?? null, kind: plan.lan.kind});
+    } else if (!lanServer && plan.writeLocal) {
+        await remember({version: 1, mode: 'local'});
+    }
+    for (const line of localLines(port)) log(line);
+    if (lanServer) {
+        for (const line of lanBanner({kind: plan.lan.kind, address: plan.lan.address, interfaceName: plan.lan.interfaceName, port})) {
+            log(line);
+        }
+    } else {
+        if (failure) {
+            log('無法開放給教室：');
+            for (const reason of failure) log(`  - ${reason}`);
+        }
+        log(`只開本機：${NO_STUDENTS}`);
+    }
+    return {aborted: false, server, lanServer, port, address: lanServer ? plan.lan.address : null,
+        lanKind: lanServer ? plan.lan.kind : null, interfaceName: lanServer ? plan.lan.interfaceName : null};
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     try {
-        if (process.env.TUTOR_LAN === '1') {
-            console.log('osep-judge 區網模式：正在檢查教師設定與網路位址…');
-            if (!fs.existsSync(path.join(root, 'build', 'editor.html'))) {
-                throw startError('找不到已建置的 build\\editor.html。請改用免建置下載包，或先執行 npm.cmd run build。');
-            }
+        console.log('osep-judge 解題導師：正在檢查教師設定與網路位址…');
+        if (!fs.existsSync(path.join(root, 'build', 'editor.html'))) {
+            throw startError('找不到已建置的 build\\editor.html。請改用免建置下載包，或先執行 npm.cmd run build。');
         }
         const teacherSettings = await createTeacherSettings(path.join(root, 'local-data', 'teacher-settings.json'));
         const secret = teacherSettings.secrets();
         const sheetClient = createSheetClient({url: secret.sheetUrl, token: secret.sheetToken});
         const recordStore = createRecordStore(path.join(root, 'local-data'), {sheetClient, syncScope: sheetScope(secret.sheetUrl)});
-        const {server, lanServer, port, address, lanKind, interfaceName} = await startTutor({teacherSettings, recordStore});
-        for (const listening of [server, lanServer].filter(Boolean)) {
+        const result = await startTutor({teacherSettings, recordStore});
+        if (result.aborted) {
+            console.log('已取消，未啟動服務。');
+            process.exit(130);
+        }
+        for (const listening of [result.server, result.lanServer].filter(Boolean)) {
             listening.on('error', () => {
                 console.error('本機服務發生連線錯誤。');
                 process.exitCode = 1;
             });
         }
-        console.log(`本機解題導師：http://127.0.0.1:${port}/editor.html`);
-        if (lanServer) for (const line of lanBanner({kind: lanKind, address, interfaceName, port})) console.log(line);
     } catch (error) {
         console.error(error.code === 'EADDRINUSE' ? '連接埠已使用；請先關閉另一個導師視窗，或設定另一個 TUTOR_PORT。' :
             error.code === 'TUTOR_START_REFUSED' ? error.message : '本機服務啟動失敗。');
