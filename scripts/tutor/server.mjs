@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -366,7 +367,9 @@ export function createTutorServer({buildDir = path.join(root, 'build'), fetchImp
     return server;
 }
 
-// ---- 區網位址選擇：只接受 RFC1918 私有 IPv4；無法唯一確定時拒絕啟動並列出原因 ----
+// ---- 區網位址選擇（v3）：自動偵測與 TUTOR_LAN_IP 共用同一個判斷式 classifyLanIPv4 ----
+// 先套用介面名稱黑名單，再分類：private（RFC1918）直接可用；public（公開單播）須經確認並釘選或明確指定；
+// excluded（特殊／保留網段、非 IPv4、格式不合法）一律排除，不詢問、不寫釘選檔。
 const parseIPv4 = text => {
     const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
     if (!match) return null;
@@ -374,22 +377,37 @@ const parseIPv4 = text => {
     if (parts.some(p => (p.length > 1 && p.startsWith('0')) || Number(p) > 255)) return null;
     return parts.map(Number);
 };
-export const isPrivateLanIPv4 = text => {
-    const p = parseIPv4(String(text || ''));
-    return Boolean(p) && (p[0] === 10 || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) || (p[0] === 192 && p[1] === 168));
-};
-const describeAddress = text => {
-    const p = parseIPv4(String(text || ''));
-    if (!p) return String(text || '').includes(':') ? 'IPv6 不支援' : '不是有效的 IPv4 位址';
-    if (p[0] === 127) return '回送位址';
-    if (p[0] === 169 && p[1] === 254) return '鏈路本機位址（169.254，通常代表沒有取得網路位址）';
-    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return 'CGNAT／Tailscale 類通道位址（100.64/10）';
-    if (p[0] === 0 || p[0] >= 224) return '保留或多播位址';
-    return '公網或非私有位址';
-};
+const EXCLUDED_RANGES = Object.freeze([
+    {test: p => p[0] === 0, reason: '保留位址（0.0.0.0/8）'},
+    {test: p => p[0] === 127, reason: '回送位址（127.0.0.0/8）'},
+    {test: p => p[0] === 169 && p[1] === 254, reason: '鏈路本機位址（169.254.0.0/16，通常代表沒有取得網路位址）'},
+    {test: p => p[0] === 100 && p[1] >= 64 && p[1] <= 127, reason: 'CGNAT／Tailscale 類通道位址（100.64.0.0/10）'},
+    {test: p => p.every(n => n === 255), reason: '廣播位址（255.255.255.255）'},
+    {test: p => p[0] >= 224 && p[0] <= 239, reason: '多播位址（224.0.0.0/4）'},
+    {test: p => p[0] >= 240, reason: '保留位址（240.0.0.0/4）'},
+    {test: p => p[0] === 192 && p[1] === 0 && p[2] === 0, reason: '特殊用途位址（192.0.0.0/24）'},
+    {test: p => p[0] === 192 && p[1] === 0 && p[2] === 2, reason: '文件範例位址（192.0.2.0/24）'},
+    {test: p => p[0] === 198 && (p[1] === 18 || p[1] === 19), reason: '效能測試位址（198.18.0.0/15）'},
+    {test: p => p[0] === 198 && p[1] === 51 && p[2] === 100, reason: '文件範例位址（198.51.100.0/24）'},
+    {test: p => p[0] === 203 && p[1] === 0 && p[2] === 113, reason: '文件範例位址（203.0.113.0/24）'}
+]);
+/** 唯一的位址判斷式：回傳 {kind: 'private'|'public'|'excluded', reason}。 */
+export function classifyLanIPv4(address) {
+    const text = String(address ?? '');
+    const p = parseIPv4(text);
+    if (!p) return {kind: 'excluded', reason: text.includes(':') ? 'IPv6 位址（區網模式只用 IPv4）' : '不是有效的 IPv4 位址'};
+    const hit = EXCLUDED_RANGES.find(range => range.test(p));
+    if (hit) return {kind: 'excluded', reason: hit.reason};
+    if (p[0] === 10 || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) || (p[0] === 192 && p[1] === 168)) {
+        return {kind: 'private', reason: '私人網段位址（RFC1918）'};
+    }
+    return {kind: 'public', reason: '公開網段位址（例如學校 TANet），須經教師確認'};
+}
+export const isPrivateLanIPv4 = text => classifyLanIPv4(text).kind === 'private';
 export const EXCLUDED_INTERFACE_PATTERNS = Object.freeze(['vEthernet', 'WSL', 'VMware', 'VirtualBox', 'Hyper-V',
     'Loopback', 'Bluetooth', 'Tailscale', 'ZeroTier', 'tun', 'tap', 'VPN']);
-export function selectLanAddress({requested = '', interfaces = {}} = {}) {
+const blacklistHit = name => EXCLUDED_INTERFACE_PATTERNS.find(p => String(name).toLowerCase().includes(p.toLowerCase()));
+const listEntries = interfaces => {
     const entries = [];
     for (const [name, list] of Object.entries(interfaces || {})) {
         for (const item of Array.isArray(list) ? list : []) {
@@ -397,30 +415,139 @@ export function selectLanAddress({requested = '', interfaces = {}} = {}) {
             entries.push({name, address: String(item?.address || ''), family, internal: item?.internal === true});
         }
     }
+    return entries;
+};
+// 黑名單先於分類；IPv6 項目以位址本身分類（必為 excluded）。
+const judgeEntry = entry => {
+    const hit = blacklistHit(entry.name);
+    if (hit) return {kind: 'excluded', reason: `介面名稱含「${hit}」（虛擬機、通道或 VPN 介面）`};
+    if (entry.family !== 'IPv4') return {kind: 'excluded', reason: 'IPv6 位址（區網模式只用 IPv4）'};
+    const verdict = classifyLanIPv4(entry.address);
+    if (verdict.kind !== 'excluded' && entry.internal) return {kind: 'excluded', reason: '系統內部介面'};
+    return verdict;
+};
+
+/**
+ * 純判斷（不讀寫檔、不詢問）。回傳：
+ * - {ok: true, address, interfaceName, kind, confirmation}：可直接綁定（private，或 TUTOR_LAN_IP 明確指定的 public）。
+ * - {ok: false, needsConfirmation: true, address, interfaceName, kind: 'public'}：唯一候選是公開位址，須查釘選或詢問。
+ * - {ok: false, reasons}：拒絕。
+ */
+export function selectLanAddress({requested = '', interfaces = {}} = {}) {
+    const entries = listEntries(interfaces);
     const wanted = String(requested || '').trim();
     if (wanted) {
-        if (!isPrivateLanIPv4(wanted)) {
-            return {ok: false, reasons: [`TUTOR_LAN_IP=${wanted}：${describeAddress(wanted)}；只接受 RFC1918 私有 IPv4（10.x、172.16～31.x、192.168.x）。`]};
+        const matches = entries.filter(e => e.address === wanted);
+        const blacklisted = matches.find(e => blacklistHit(e.name));
+        if (blacklisted) {
+            return {ok: false, reasons: [`TUTOR_LAN_IP=${wanted}（介面 ${blacklisted.name}）：介面名稱含「${blacklistHit(blacklisted.name)}」（虛擬機、通道或 VPN 介面），不能用於區網模式。`]};
         }
-        if (!entries.some(e => e.family === 'IPv4' && e.address === wanted)) {
-            return {ok: false, reasons: [`TUTOR_LAN_IP=${wanted}：這台電腦的網路介面沒有這個位址，請用 ipconfig 確認。`]};
-        }
-        return {ok: true, address: wanted, reasons: []};
+        const verdict = classifyLanIPv4(wanted);
+        if (verdict.kind === 'excluded') return {ok: false, reasons: [`TUTOR_LAN_IP=${wanted}：${verdict.reason}，不能用於區網模式。`]};
+        const usable = matches.find(e => e.family === 'IPv4' && !e.internal);
+        if (!usable) return {ok: false, reasons: [`TUTOR_LAN_IP=${wanted}：這台電腦的網路介面沒有這個位址，請用 ipconfig 確認。`]};
+        return {ok: true, address: wanted, interfaceName: usable.name, kind: verdict.kind, confirmation: 'explicit', reasons: []};
     }
     const excluded = [], candidates = [];
     for (const e of entries) {
-        const hit = EXCLUDED_INTERFACE_PATTERNS.find(p => e.name.toLowerCase().includes(p.toLowerCase()));
-        const reason = e.family !== 'IPv4' ? 'IPv6 不支援' : e.internal ? '系統內部回送介面' :
-            !isPrivateLanIPv4(e.address) ? `${describeAddress(e.address)}，不是 RFC1918 私有位址` :
-                hit ? `介面名稱含「${hit}」（虛擬機、通道或 VPN 介面）` : '';
-        if (reason) excluded.push(`${e.name} ${e.address}：排除，${reason}`);
-        else if (!candidates.some(c => c.address === e.address)) candidates.push(e);
+        const verdict = judgeEntry(e);
+        if (verdict.kind === 'excluded') excluded.push(`${e.name} ${e.address}：排除，${verdict.reason}`);
+        else if (!candidates.some(c => c.address === e.address)) candidates.push({...e, kind: verdict.kind});
     }
-    if (candidates.length === 1) return {ok: true, address: candidates[0].address, interfaceName: candidates[0].name, reasons: excluded};
+    if (candidates.length === 1) {
+        const [only] = candidates;
+        if (only.kind === 'private') {
+            return {ok: true, address: only.address, interfaceName: only.name, kind: 'private', confirmation: 'none', reasons: excluded};
+        }
+        return {ok: false, needsConfirmation: true, address: only.address, interfaceName: only.name, kind: 'public', reasons: excluded};
+    }
     const head = candidates.length ? `找到 ${candidates.length} 個可能的區網位址，無法自動判斷要用哪一個：` :
-        '找不到可用的 RFC1918 私有區網位址：';
-    return {ok: false, reasons: [head, ...candidates.map(c => `${c.name} ${c.address}：符合條件`), ...excluded,
-        '請以 TUTOR_LAN_IP=<教師機區網 IPv4> 指定後再啟動。']};
+        '找不到可用的區網位址：';
+    return {ok: false, reasons: [head,
+        ...candidates.map(c => `${c.name} ${c.address}：${c.kind === 'private' ? '私人網段' : '公開網段'}，可用`), ...excluded,
+        '請以 TUTOR_LAN_IP=<教師機的 IPv4> 指定後再啟動。']};
+}
+
+export const LAN_PIN_FILE = path.join(root, 'local-data', 'lan-address.json');
+const readPin = async file => {
+    let raw;
+    try { raw = await fsp.readFile(file, 'utf8'); } catch (error) {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+    }
+    try {
+        const value = JSON.parse(raw);
+        if (value?.version === 1 && classifyLanIPv4(value.address).kind === 'public') return value;
+    } catch { /* 損壞的釘選檔視同未釘選，仍須重新確認。 */ }
+    return {invalid: true};
+};
+const writePin = async (file, data) => {
+    await fsp.mkdir(path.dirname(file), {recursive: true});
+    const temp = `${file}.${randomBytes(8).toString('hex')}.tmp`;
+    const handle = await fsp.open(temp, 'wx', 0o600);
+    try { await handle.writeFile(JSON.stringify(data)); await handle.sync(); } finally { await handle.close(); }
+    try { await fsp.rename(temp, file); } catch (error) {
+        await fsp.unlink(temp).catch(() => {});
+        throw error;
+    }
+};
+const defaultPrompt = async question => {
+    const readline = await import('node:readline/promises');
+    const rl = readline.createInterface({input: process.stdin, output: process.stdout});
+    try { return await rl.question(question); } finally { rl.close(); }
+};
+
+/**
+ * 決定區網位址（含公開位址的「第一次確認後釘選」）。
+ * prompt 只在 interactive 為 true 且唯一候選是未釘選的公開位址時呼叫；其他情況一律不詢問。
+ */
+export async function resolveLanAddress({requested = '', interfaces = {}, pinFile = LAN_PIN_FILE,
+    interactive = false, prompt = defaultPrompt} = {}) {
+    const selected = selectLanAddress({requested, interfaces});
+    if (selected.ok || !selected.needsConfirmation) return selected;
+    const {address, interfaceName} = selected;
+    const pin = await readPin(pinFile);
+    if (pin && !pin.invalid) {
+        if (pin.address === address) return {...selected, ok: true, needsConfirmation: false, confirmation: 'pinned'};
+        return {ok: false, reasons: [
+            `已記住的學校位址 ${pin.address} 目前不在這台電腦的網路介面上（現在偵測到 ${address}，介面 ${interfaceName}）。`,
+            '不自動改用其他公開位址。若確定已換到另一個學校網路，請刪除 local-data/lan-address.json 後重新啟動並再次確認，或以 TUTOR_LAN_IP 指定。',
+            ...selected.reasons]};
+    }
+    if (!interactive) {
+        return {ok: false, reasons: [
+            `偵測到 ${address}（介面 ${interfaceName}）是學校／公開網段位址，需要教師在啟動視窗確認一次。`,
+            '目前不是互動式視窗，無法詢問；請雙擊 start-tutor-lan.cmd 啟動，或以 TUTOR_LAN_IP 指定這個位址。', ...selected.reasons]};
+    }
+    const answer = await prompt(`偵測到 ${address}（${interfaceName}）是學校／公開網段位址。確認目前在學校網路內並記住這個位址？(Y/N) `);
+    if (!/^\s*y(?:es)?\s*$/i.test(String(answer ?? ''))) {
+        return {ok: false, reasons: [`教師未確認使用 ${address}，區網模式不啟動。`, ...selected.reasons]};
+    }
+    try {
+        await writePin(pinFile, {version: 1, address, interfaceName, confirmedAt: new Date().toISOString()});
+    } catch {
+        return {ok: false, reasons: ['無法寫入 local-data/lan-address.json，區網模式不啟動；請確認資料夾可寫入。']};
+    }
+    return {...selected, ok: true, needsConfirmation: false, confirmation: 'prompted'};
+}
+
+/** 啟動後的說明文字；私人網段與已確認的學校公開位址不同。 */
+export function lanBanner({kind, address, interfaceName, port}) {
+    const lines = kind === 'public' ?
+        [`區網模式已啟動：學校公開網段位址 ${address}（介面 ${interfaceName}，教師已確認）。`] :
+        [`區網模式已啟動：私人網段位址 ${address}（介面 ${interfaceName}）。`];
+    lines.push(`學生網址：http://${address}:${port}/editor.html?turbo`,
+        `教師頁只能在這台電腦開：http://127.0.0.1:${port}/teacher.html`,
+        'Windows 防火牆詢問時，只勾「私人網路」或「網域」，不要勾「公用網路」。');
+    if (kind === 'public') {
+        lines.push('注意：這是公開網段位址，校外能不能連進來取決於學校防火牆；請資訊組確認已擋下校外連入。',
+            '若 Windows 把學校網路判成「公用」，請資訊組建立只開這個連接埠、只允許校內位址的防火牆規則，不要把 node.exe 加進公用網路。',
+            '上線後請用手機關閉 Wi-Fi、改用行動數據開上面的學生網址：必須打不開；若打得開，立刻關閉這個視窗並通知資訊組。',
+            '下課後請關閉這個視窗。');
+    }
+    lines.push('不要同時開連接埠轉送或通道工具（例如 ngrok）。',
+        '緊急停止：關閉這個視窗；或在教師頁清除 AI 金鑰，學生只剩模擬練習。');
+    return lines;
 }
 
 export function lanReadiness(teacherSettings) {
@@ -436,6 +563,10 @@ export function lanReadiness(teacherSettings) {
 
 const startError = (message, reasons = []) => Object.assign(new Error(message), {code: 'TUTOR_START_REFUSED', reasons});
 const listenOn = (server, port, address) => new Promise((resolve, reject) => {
+    if (typeof address !== 'string' || !address || address === '0.0.0.0' || address.includes(':')) {
+        reject(startError('拒絕監聽未指定或萬用位址。'));
+        return;
+    }
     const onError = error => {server.off('listening', onListening); reject(error);};
     const onListening = () => {server.off('error', onError); resolve();};
     server.once('error', onError);
@@ -444,14 +575,16 @@ const listenOn = (server, port, address) => new Promise((resolve, reject) => {
 });
 
 /** 依環境變數啟動；TUTOR_LAN=1 時另開區網監聽器，條件不符一律拒絕啟動（不降級成部分開放）。 */
-export async function startTutor({env = process.env, interfaces = null, teacherSettings, recordStore, ...options} = {}) {
+export async function startTutor({env = process.env, interfaces = null, teacherSettings, recordStore,
+    lanPinFile = LAN_PIN_FILE, interactive = process.stdin.isTTY === true, prompt = defaultPrompt, ...options} = {}) {
     const port = Number(env.TUTOR_PORT || 8612);
     if (!Number.isInteger(port) || port < 1024 || port > 65535) throw startError('TUTOR_PORT 必須介於 1024 與 65535。');
-    let lan = null;
+    let lan = null, selected = null;
     if (env.TUTOR_LAN === '1') {
         const reasons = lanReadiness(teacherSettings);
         if (reasons.length) throw startError('區網模式拒絕啟動。', reasons);
-        const selected = selectLanAddress({requested: env.TUTOR_LAN_IP, interfaces: interfaces || os.networkInterfaces()});
+        selected = await resolveLanAddress({requested: env.TUTOR_LAN_IP, interfaces: interfaces || os.networkInterfaces(),
+            pinFile: lanPinFile, interactive, prompt});
         if (!selected.ok) throw startError('區網模式拒絕啟動：無法確定教師機的區網位址。', selected.reasons);
         lan = {address: selected.address};
     }
@@ -463,16 +596,23 @@ export async function startTutor({env = process.env, interfaces = null, teacherS
             throw startError(`區網模式拒絕啟動：無法監聽 ${lan.address}:${port}（${error.code || '未知錯誤'}）。`);
         }
     }
-    return {server, lanServer: server.lanServer || null, port, address: lan?.address || null};
+    return {server, lanServer: server.lanServer || null, port, address: lan?.address || null,
+        lanKind: selected?.kind || null, interfaceName: selected?.interfaceName || null};
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     try {
+        if (process.env.TUTOR_LAN === '1') {
+            console.log('osep-judge 區網模式：正在檢查教師設定與網路位址…');
+            if (!fs.existsSync(path.join(root, 'build', 'editor.html'))) {
+                throw startError('找不到已建置的 build\\editor.html。請改用免建置下載包，或先執行 npm.cmd run build。');
+            }
+        }
         const teacherSettings = await createTeacherSettings(path.join(root, 'local-data', 'teacher-settings.json'));
         const secret = teacherSettings.secrets();
         const sheetClient = createSheetClient({url: secret.sheetUrl, token: secret.sheetToken});
         const recordStore = createRecordStore(path.join(root, 'local-data'), {sheetClient, syncScope: sheetScope(secret.sheetUrl)});
-        const {server, lanServer, port, address} = await startTutor({teacherSettings, recordStore});
+        const {server, lanServer, port, address, lanKind, interfaceName} = await startTutor({teacherSettings, recordStore});
         for (const listening of [server, lanServer].filter(Boolean)) {
             listening.on('error', () => {
                 console.error('本機服務發生連線錯誤。');
@@ -480,15 +620,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
             });
         }
         console.log(`本機解題導師：http://127.0.0.1:${port}/editor.html`);
-        if (lanServer) {
-            console.log(`區網模式已啟動，綁定位址：${address}`);
-            console.log(`學生網址：http://${address}:${port}/editor.html?turbo`);
-            console.log(`教師頁只能在這台電腦開：http://127.0.0.1:${port}/teacher.html`);
-            console.log('只在校內私人網路使用；Windows 防火牆只勾「私人網路」；勿同時開連接埠轉送或通道工具。');
-            console.log('緊急停止：關閉這個視窗，或在教師頁清除 AI 金鑰（學生只剩模擬練習）。');
-        }
+        if (lanServer) for (const line of lanBanner({kind: lanKind, address, interfaceName, port})) console.log(line);
     } catch (error) {
-        console.error(error.code === 'EADDRINUSE' ? '連接埠已使用；請設定另一個 TUTOR_PORT。' :
+        console.error(error.code === 'EADDRINUSE' ? '連接埠已使用；請先關閉另一個導師視窗，或設定另一個 TUTOR_PORT。' :
             error.code === 'TUTOR_START_REFUSED' ? error.message : '本機服務啟動失敗。');
         for (const reason of error.reasons || []) console.error(`  - ${reason}`);
         process.exitCode = 1;

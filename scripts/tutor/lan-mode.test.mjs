@@ -8,7 +8,8 @@ import net from 'node:net';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
-import {createTutorServer, startTutor, selectLanAddress, isPrivateLanIPv4, lanReadiness,
+import {createTutorServer, startTutor, selectLanAddress, isPrivateLanIPv4, lanReadiness, classifyLanIPv4,
+    resolveLanAddress, lanBanner,
     ENTRY_LIMIT_PER_IP, LIVE_LIMIT_PER_IP, LIVE_LIMIT_GLOBAL, LIVE_CONCURRENCY, RATE_WINDOW_MS,
     REQUEST_TIMEOUT_MS, HEADERS_TIMEOUT_MS, MAX_CONNECTIONS} from './server.mjs';
 import {createTeacherSettings} from './teacher-settings.mjs';
@@ -410,64 +411,232 @@ test('A6 區網 /api/tutor/status 只回 managed 與 aiConfigured 兩欄', async
     assert.deepEqual(localStatus, {managed: true, initialized: true, aiConfigured: true, sheetConfigured: false});
 });
 
-test('A7 IP 選擇：只接受唯一的 RFC1918 候選；多候選、零候選、公網、100.64、指定非私有都拒絕並列原因', () => {
-    for (const ip of ['10.0.0.1', '172.16.0.1', '172.31.255.254', '192.168.0.1']) assert.equal(isPrivateLanIPv4(ip), true, ip);
-    for (const ip of ['8.8.8.8', '100.64.0.1', '100.127.1.1', '169.254.1.1', '127.0.0.1', '172.15.0.1', '172.32.0.1',
-        '192.169.0.1', '0.0.0.0', '192.168.1.256', '192.168.01.1', 'fe80::1', '::ffff:192.168.1.1', '']) {
-        assert.equal(isPrivateLanIPv4(ip), false, ip);
+// ---- A7'（v3）：區網位址選擇；自動偵測與 TUTOR_LAN_IP 共用 classifyLanIPv4 ----
+const nic = (name, address, family = 'IPv4', internal = false) => ({[name]: [{address, family, internal}]});
+const promptSpy = answer => {
+    const spy = {calls: 0, questions: []};
+    spy.fn = async question => {spy.calls++; spy.questions.push(question); return answer;};
+    return spy;
+};
+const fileExists = async file => fs.access(file).then(() => true, () => false);
+async function pinFileFor(t) {
+    return path.join(await directory(t), 'lan-address.json');
+}
+const SCHOOL_IP = '163.27.45.21';
+const EXCLUDED_SAMPLES = [
+    ['0.1.2.3', '0.0.0.0/8'], ['0.0.0.0', '0.0.0.0/8'], ['127.0.0.2', '127.0.0.0/8'], ['169.254.10.20', '169.254.0.0/16'],
+    ['100.64.0.9', '100.64.0.0/10'], ['100.127.255.254', '100.64.0.0/10'], ['224.0.0.1', '224.0.0.0/4'],
+    ['239.255.255.250', '224.0.0.0/4'], ['240.1.2.3', '240.0.0.0/4'], ['255.255.255.255', '255.255.255.255'],
+    ['192.0.0.9', '192.0.0.0/24'], ['192.0.2.9', '192.0.2.0/24'], ['198.18.5.5', '198.18.0.0/15'],
+    ['198.19.255.1', '198.18.0.0/15'], ['198.51.100.9', '198.51.100.0/24'], ['203.0.113.9', '203.0.113.0/24']
+];
+const BLACKLISTED_NICS = ['OpenVPN TAP-Windows6', 'Tailscale', 'ZeroTier One', 'vEthernet (Default Switch)',
+    'VMware Network Adapter VMnet1', 'VirtualBox Host-Only Network', 'Cisco AnyConnect VPN', 'tun0', 'Bluetooth 網路連線'];
+
+test('classifyLanIPv4：共用判斷式的邊界，自動偵測與 TUTOR_LAN_IP 對同一位址結論一致', () => {
+    for (const ip of ['10.0.0.1', '172.16.0.1', '172.31.255.254', '192.168.0.1']) assert.equal(classifyLanIPv4(ip).kind, 'private', ip);
+    for (const ip of [SCHOOL_IP, '8.8.8.8', '172.15.0.1', '172.32.0.1', '100.63.255.255', '100.128.0.1', '192.0.1.1',
+        '192.169.0.1', '198.17.255.255', '198.20.0.1', '198.51.101.1', '203.0.114.1', '223.255.255.255']) {
+        assert.equal(classifyLanIPv4(ip).kind, 'public', ip);
     }
-    const multi = selectLanAddress({interfaces: {
-        '乙太網路': [{address: '192.168.1.23', family: 'IPv4', internal: false}],
-        'Wi-Fi': [{address: '10.0.0.5', family: 'IPv4', internal: false}]}});
-    assert.equal(multi.ok, false);
-    assert.ok(multi.reasons.join('\n').includes('192.168.1.23') && multi.reasons.join('\n').includes('10.0.0.5'));
-    assert.ok(multi.reasons.some(r => r.includes('TUTOR_LAN_IP')));
-    const zero = selectLanAddress({interfaces: {}});
-    assert.equal(zero.ok, false);
-    assert.ok(zero.reasons.some(r => r.includes('找不到')));
-    const publicOnly = selectLanAddress({interfaces: {'乙太網路': [{address: '203.0.113.5', family: 'IPv4', internal: false}]}});
-    assert.equal(publicOnly.ok, false);
-    assert.ok(publicOnly.reasons.some(r => r.includes('203.0.113.5') && r.includes('公網')));
-    const cgnatOnly = selectLanAddress({interfaces: {'乙太網路 2': [{address: '100.100.1.2', family: 'IPv4', internal: false}]}});
-    assert.equal(cgnatOnly.ok, false);
-    assert.ok(cgnatOnly.reasons.some(r => r.includes('100.100.1.2') && r.includes('100.64/10')));
-    for (const requested of ['8.8.8.8', '100.64.1.2', '169.254.3.4', '127.0.0.1', 'fe80::1', '172.32.0.1']) {
-        const result = selectLanAddress({requested, interfaces: {'乙太網路': [{address: requested, family: 'IPv4', internal: false}]}});
-        assert.equal(result.ok, false, requested);
-        assert.ok(result.reasons[0].includes(requested));
+    for (const [ip] of EXCLUDED_SAMPLES) assert.equal(classifyLanIPv4(ip).kind, 'excluded', ip);
+    for (const ip of ['fe80::1', '::1', '::ffff:192.168.1.1', '192.168.1.256', '192.168.01.1', '1.2.3', '', 'abc']) {
+        assert.equal(classifyLanIPv4(ip).kind, 'excluded', ip);
     }
-    assert.equal(selectLanAddress({requested: '192.168.9.9', interfaces: oneLan}).ok, false); // 介面上不存在
-    assert.deepEqual(selectLanAddress({requested: '192.168.1.23', interfaces: oneLan}),
-        {ok: true, address: '192.168.1.23', reasons: []});
-    // 只有一個 192.168 候選：虛擬／通道／回送／IPv6 介面全部被排除並列出原因。
-    const single = selectLanAddress({interfaces: {
-        'Wi-Fi': [{address: 'fe80::1234', family: 'IPv6', internal: false}, {address: '192.168.1.23', family: 'IPv4', internal: false}],
-        'vEthernet (WSL)': [{address: '172.20.48.1', family: 'IPv4', internal: false}],
-        'VMware Network Adapter VMnet8': [{address: '192.168.56.1', family: 'IPv4', internal: false}],
-        'VirtualBox Host-Only Network': [{address: '192.168.99.1', family: 'IPv4', internal: false}],
-        'Tailscale': [{address: '100.101.102.103', family: 'IPv4', internal: false}],
-        'ZeroTier One': [{address: '10.147.17.5', family: 'IPv4', internal: false}],
-        'OpenVPN TAP-Windows6': [{address: '10.8.0.6', family: 'IPv4', internal: false}],
-        'Bluetooth Network Connection': [{address: '192.168.44.1', family: 'IPv4', internal: false}],
-        'Loopback Pseudo-Interface 1': [{address: '127.0.0.1', family: 'IPv4', internal: true}]
-    }});
-    assert.equal(single.ok, true);
-    assert.equal(single.address, '192.168.1.23');
-    assert.equal(single.interfaceName, 'Wi-Fi');
-    assert.equal(single.reasons.length, 9);
-    for (const name of ['vEthernet', 'VMware', 'VirtualBox', 'Tailscale', 'ZeroTier', 'VPN', 'Bluetooth']) {
-        assert.ok(single.reasons.some(r => r.includes(name)), name);
+    assert.equal(isPrivateLanIPv4('192.168.1.23'), true);
+    assert.equal(isPrivateLanIPv4(SCHOOL_IP), false);
+    for (const ip of ['192.168.1.23', SCHOOL_IP, ...EXCLUDED_SAMPLES.map(([address]) => address)]) {
+        const verdict = classifyLanIPv4(ip);
+        const auto = selectLanAddress({interfaces: nic('乙太網路', ip)});
+        const explicit = selectLanAddress({requested: ip, interfaces: nic('乙太網路', ip)});
+        if (verdict.kind === 'excluded') {
+            assert.equal(auto.ok, false, ip);
+            assert.equal(auto.needsConfirmation, undefined, ip);
+            assert.equal(explicit.ok, false, ip);
+            assert.ok(auto.reasons.some(r => r.includes(ip) && r.includes(verdict.reason)), ip);
+            assert.ok(explicit.reasons.some(r => r.includes(ip) && r.includes(verdict.reason)), ip);
+        } else if (verdict.kind === 'private') {
+            assert.equal(auto.ok, true);
+            assert.equal(explicit.ok, true);
+        } else {
+            assert.equal(auto.needsConfirmation, true);
+            assert.equal(explicit.ok, true);
+            assert.equal(explicit.kind, 'public');
+        }
+        for (const result of [auto, explicit]) assert.ok(!(result.reasons || []).join('').includes('只接受 RFC1918'));
     }
 });
 
-test('A7 startTutor 在多候選時拒絕啟動並帶出原因', async t => {
-    const port = await freePort();
+test('A7\'1 自動偵測：私人單一候選綁定；公開位址須確認並釘選；已釘選／離校／多候選依規則處理', async t => {
+    // 單一 RFC1918（其他虛擬／通道／回送／IPv6 介面全部排除）→ 直接綁定，不詢問、不寫檔。
+    let pinFile = await pinFileFor(t);
+    let spy = promptSpy('Y');
+    const privateOnly = await resolveLanAddress({pinFile, interactive: true, prompt: spy.fn, interfaces: {
+        'Wi-Fi': [{address: 'fe80::1234', family: 'IPv6', internal: false}, {address: '192.168.1.23', family: 'IPv4', internal: false}],
+        'vEthernet (WSL)': [{address: '172.20.48.1', family: 'IPv4', internal: false}],
+        'VMware Network Adapter VMnet8': [{address: '192.168.56.1', family: 'IPv4', internal: false}],
+        'Tailscale': [{address: '100.101.102.103', family: 'IPv4', internal: false}],
+        'Loopback Pseudo-Interface 1': [{address: '127.0.0.1', family: 'IPv4', internal: true}]}});
+    assert.equal(privateOnly.ok, true);
+    assert.equal(privateOnly.address, '192.168.1.23');
+    assert.equal(privateOnly.interfaceName, 'Wi-Fi');
+    assert.equal(privateOnly.kind, 'private');
+    assert.equal(spy.calls, 0);
+    assert.equal(await fileExists(pinFile), false);
+    // 單一公開位址、未釘選、非互動 → 拒絕並提示，不詢問。
+    const school = nic('乙太網路', SCHOOL_IP);
+    spy = promptSpy('Y');
+    const nonInteractive = await resolveLanAddress({pinFile, interactive: false, prompt: spy.fn, interfaces: school});
+    assert.equal(nonInteractive.ok, false);
+    assert.ok(nonInteractive.reasons.some(r => r.includes(SCHOOL_IP) && r.includes('乙太網路')));
+    assert.ok(nonInteractive.reasons.some(r => r.includes('start-tutor-lan.cmd') && r.includes('TUTOR_LAN_IP')));
+    assert.equal(spy.calls, 0);
+    assert.equal(await fileExists(pinFile), false);
+    // 回答 N → 拒絕，不寫檔。
+    spy = promptSpy('N');
+    const declined = await resolveLanAddress({pinFile, interactive: true, prompt: spy.fn, interfaces: school});
+    assert.equal(declined.ok, false);
+    assert.equal(spy.calls, 1);
+    assert.equal(await fileExists(pinFile), false);
+    // 回答 Y → 寫入釘選檔並綁定；詢問句含位址與介面名。
+    spy = promptSpy('y');
+    const confirmed = await resolveLanAddress({pinFile, interactive: true, prompt: spy.fn, interfaces: school});
+    assert.equal(confirmed.ok, true);
+    assert.equal(confirmed.address, SCHOOL_IP);
+    assert.equal(confirmed.kind, 'public');
+    assert.equal(confirmed.confirmation, 'prompted');
+    assert.equal(spy.calls, 1);
+    assert.ok(spy.questions[0].includes(SCHOOL_IP) && spy.questions[0].includes('乙太網路') && spy.questions[0].includes('(Y/N)'));
+    const pinned = JSON.parse(await fs.readFile(pinFile, 'utf8'));
+    assert.equal(pinned.version, 1);
+    assert.equal(pinned.address, SCHOOL_IP);
+    assert.deepEqual((await fs.readdir(path.dirname(pinFile))).filter(name => name.endsWith('.tmp')), []);
+    // 已釘選且網卡上仍有 → 綁定，不再詢問（非互動也可）。
+    spy = promptSpy('N');
+    const reuse = await resolveLanAddress({pinFile, interactive: false, prompt: spy.fn, interfaces: school});
+    assert.equal(reuse.ok, true);
+    assert.equal(reuse.confirmation, 'pinned');
+    assert.equal(spy.calls, 0);
+    // 已釘選但網卡上已無（換到另一個公開位址或沒有網路）→ 拒絕，不詢問、不改寫釘選檔。
+    const pinBefore = await fs.readFile(pinFile, 'utf8');
+    for (const interfaces of [nic('乙太網路', '163.27.45.99'), {}]) {
+        spy = promptSpy('Y');
+        const moved = await resolveLanAddress({pinFile, interactive: true, prompt: spy.fn, interfaces});
+        assert.equal(moved.ok, false);
+        assert.equal(spy.calls, 0);
+        assert.equal(await fs.readFile(pinFile, 'utf8'), pinBefore);
+    }
+    const moved = await resolveLanAddress({pinFile, interactive: true, prompt: promptSpy('Y').fn, interfaces: nic('乙太網路', '163.27.45.99')});
+    assert.ok(moved.reasons.some(r => r.includes(SCHOOL_IP) && r.includes('163.27.45.99')));
+    // 公開＋私人各一（同卡或不同卡）→ 多候選拒絕，不詢問、不寫檔。
+    pinFile = await pinFileFor(t);
+    for (const interfaces of [
+        {'乙太網路': [{address: SCHOOL_IP, family: 'IPv4', internal: false}, {address: '192.168.1.23', family: 'IPv4', internal: false}]},
+        {...nic('乙太網路', SCHOOL_IP), ...nic('Wi-Fi', '192.168.1.23')}
+    ]) {
+        spy = promptSpy('Y');
+        const multi = await resolveLanAddress({pinFile, interactive: true, prompt: spy.fn, interfaces});
+        assert.equal(multi.ok, false);
+        assert.ok(multi.reasons.join('\n').includes(SCHOOL_IP) && multi.reasons.join('\n').includes('192.168.1.23'));
+        assert.equal(spy.calls, 0);
+        assert.equal(await fileExists(pinFile), false);
+    }
+    // 損壞的釘選檔視同未釘選：非互動拒絕、不詢問。
+    await fs.writeFile(pinFile, '{broken');
+    spy = promptSpy('Y');
+    assert.equal((await resolveLanAddress({pinFile, interactive: false, prompt: spy.fn, interfaces: school})).ok, false);
+    assert.equal(spy.calls, 0);
+});
+
+test('A7\'2 指定 TUTOR_LAN_IP：本機存在的公開位址接受；不存在、特殊網段、IPv6、黑名單介面一律拒絕', async t => {
+    const pinFile = await pinFileFor(t);
+    let spy = promptSpy('Y');
+    const explicit = await resolveLanAddress({requested: SCHOOL_IP, pinFile, interactive: true, prompt: spy.fn,
+        interfaces: nic('乙太網路', SCHOOL_IP)});
+    assert.equal(explicit.ok, true);
+    assert.equal(explicit.kind, 'public');
+    assert.equal(explicit.confirmation, 'explicit');
+    assert.equal(explicit.interfaceName, '乙太網路');
+    assert.equal(spy.calls, 0);
+    assert.equal(await fileExists(pinFile), false); // 明確指定不寫釘選檔
+    const missing = selectLanAddress({requested: SCHOOL_IP, interfaces: nic('乙太網路', '163.27.45.22')});
+    assert.equal(missing.ok, false);
+    assert.ok(missing.reasons[0].includes(SCHOOL_IP) && missing.reasons[0].includes('沒有這個位址'));
+    assert.equal(selectLanAddress({requested: '192.168.9.9', interfaces: oneLan}).ok, false);
+    assert.equal(selectLanAddress({requested: '192.168.1.23', interfaces: oneLan}).ok, true);
+    for (const [ip, range] of [...EXCLUDED_SAMPLES, ['fe80::1', 'IPv6'], ['::1', 'IPv6']]) {
+        spy = promptSpy('Y');
+        const result = await resolveLanAddress({requested: ip, pinFile, interactive: true, prompt: spy.fn,
+            interfaces: nic('乙太網路', ip, ip.includes(':') ? 'IPv6' : 'IPv4')});
+        assert.equal(result.ok, false, ip);
+        assert.ok(result.reasons[0].includes(ip) && result.reasons[0].includes(range), `${ip}: ${result.reasons[0]}`);
+        assert.ok(!result.reasons[0].includes('只接受 RFC1918'));
+        assert.equal(spy.calls, 0);
+        assert.equal(await fileExists(pinFile), false);
+    }
+    for (const name of BLACKLISTED_NICS) {
+        for (const ip of [SCHOOL_IP, '10.8.0.6']) {
+            const result = selectLanAddress({requested: ip, interfaces: nic(name, ip)});
+            assert.equal(result.ok, false, `${name} ${ip}`);
+            assert.ok(result.reasons[0].includes(name), result.reasons[0]);
+        }
+    }
+});
+
+test('A7\'2a 自動偵測反例：特殊網段或黑名單介面上的位址一律排除，不詢問、不寫釘選檔', async t => {
+    const pinFile = await pinFileFor(t);
+    const cases = [...EXCLUDED_SAMPLES.map(([ip, range]) => ({interfaces: nic('乙太網路', ip), ip, expect: range})),
+        ...BLACKLISTED_NICS.map(name => ({interfaces: nic(name, '163.27.10.20'), ip: '163.27.10.20', expect: name}))];
+    for (const {interfaces, ip, expect} of cases) {
+        const spy = promptSpy('Y');
+        const result = await resolveLanAddress({pinFile, interactive: true, prompt: spy.fn, interfaces});
+        assert.equal(result.ok, false, ip);
+        assert.equal(spy.calls, 0, `${ip} 不可詢問`);
+        assert.equal(await fileExists(pinFile), false, `${ip} 不可寫釘選檔`);
+        assert.ok(result.reasons.some(r => r.includes(ip) && r.includes(expect)), `${ip}: ${result.reasons.join(' | ')}`);
+    }
+});
+
+test('A7\'3 永不綁 0.0.0.0：監聽位址只有 127.0.0.1 與選定位址；公開位址確認後顯示學校警語', async t => {
+    const originalListen = http.Server.prototype.listen;
+    const hosts = [];
+    // 記錄實際要求的監聽位址；測試中把區網監聽器改綁回送位址的隨機埠，避免真的開放網路。
+    http.Server.prototype.listen = function (port, host, ...rest) {
+        hosts.push(host);
+        return originalListen.call(this, host === '127.0.0.1' ? port : 0, '127.0.0.1', ...rest);
+    };
+    t.after(() => {http.Server.prototype.listen = originalListen;});
     const ready = await settingsFor(await directory(t));
-    await assert.rejects(startTutor({env: {TUTOR_LAN: '1', TUTOR_PORT: String(port)}, teacherSettings: ready, buildDir: fixtureDir,
-        interfaces: {'乙太網路': [{address: '192.168.1.23', family: 'IPv4', internal: false}],
-            'Wi-Fi': [{address: '192.168.2.40', family: 'IPv4', internal: false}]}}),
-    error => error.code === 'TUTOR_START_REFUSED' && error.reasons.some(r => r.includes('192.168.2.40')));
-    assert.equal(await portIsFree(port), true);
+    const pinFile = await pinFileFor(t);
+    const privatePort = await freePort();
+    const privateRun = await startTutor({env: {TUTOR_LAN: '1', TUTOR_PORT: String(privatePort), TUTOR_LAN_IP: '192.168.1.23'},
+        interfaces: oneLan, teacherSettings: ready, buildDir: fixtureDir, lanPinFile: pinFile, interactive: false});
+    t.after(async () => {await closeServer(privateRun.server); await closeServer(privateRun.lanServer);});
+    assert.deepEqual(hosts, ['127.0.0.1', '192.168.1.23']);
+    assert.equal(privateRun.lanKind, 'private');
+    const spy = promptSpy('Y');
+    const publicRun = await startTutor({env: {TUTOR_LAN: '1', TUTOR_PORT: String(await freePort())},
+        interfaces: nic('乙太網路', SCHOOL_IP), teacherSettings: ready, buildDir: fixtureDir, lanPinFile: pinFile,
+        interactive: true, prompt: spy.fn});
+    t.after(async () => {await closeServer(publicRun.server); await closeServer(publicRun.lanServer);});
+    assert.deepEqual(hosts, ['127.0.0.1', '192.168.1.23', '127.0.0.1', SCHOOL_IP]);
+    assert.ok(hosts.every(host => typeof host === 'string' && host !== '0.0.0.0' && !host.includes(':')));
+    assert.equal(publicRun.address, SCHOOL_IP);
+    assert.equal(publicRun.lanKind, 'public');
+    assert.equal(spy.calls, 1);
+    assert.equal(JSON.parse(await fs.readFile(pinFile, 'utf8')).address, SCHOOL_IP);
+    // 選擇結果不可能是 0.0.0.0：即使網卡或指定值是 0.0.0.0 也被排除。
+    assert.equal(selectLanAddress({requested: '0.0.0.0', interfaces: nic('乙太網路', '0.0.0.0')}).ok, false);
+    assert.equal(selectLanAddress({interfaces: nic('乙太網路', '0.0.0.0')}).ok, false);
+    // 說明文字依綁定類型不同。
+    const publicText = lanBanner({kind: 'public', address: SCHOOL_IP, interfaceName: '乙太網路', port: 8612}).join('\n');
+    const privateText = lanBanner({kind: 'private', address: '192.168.1.23', interfaceName: 'Wi-Fi', port: 8612}).join('\n');
+    for (const phrase of ['學校公開網段', '學校防火牆', '「私人網路」或「網域」', '公用', '行動數據', '下課', `http://${SCHOOL_IP}:8612/editor.html`]) {
+        assert.ok(publicText.includes(phrase), phrase);
+    }
+    assert.ok(privateText.includes('私人網段') && privateText.includes('http://192.168.1.23:8612/editor.html'));
+    assert.ok(!privateText.includes('行動數據') && !privateText.includes('學校防火牆'));
+    assert.ok(!`${publicText}\n${privateText}`.includes('RFC1918'));
 });
 
 test('連線層：預設 requestTimeout 30 秒、headersTimeout 10 秒、maxConnections 200（兩個監聽器）', async t => {

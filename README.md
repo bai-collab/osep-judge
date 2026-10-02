@@ -10,7 +10,7 @@ osep-judge 是一個以 Scratch 積木程式解題為主的教學平台，介面
 | --- | --- |
 | 只要讓學生練題、評分 | **線上網站（GitHub Pages 靜態版）**：<https://bai-collab.github.io/osep-judge/>，不用安裝，但沒有 AI 導師與教師紀錄。 |
 | 要 AI 解題導師、學生紀錄、Google 試算表 | **本機安裝版**：到 [Releases](https://github.com/bai-collab/osep-judge/releases/latest) 下載 `osep-judge-local-tutor.zip`（免建置），解壓後雙擊 `start-tutor.cmd`；完整步驟見 [教師快速設定](TEACHER-SETUP.md)。 |
-| 同教室學生電腦只開瀏覽器，連教師機用導師 | **區網模式**：教師機設定完成後雙擊 `start-tutor-lan.cmd`，學生開視窗顯示的 `http://教師機區網IP:8612/editor.html`；金鑰只留教師機。步驟、防火牆與剩餘風險見 [教師快速設定第 6 節](TEACHER-SETUP.md#6-區網模式學生電腦只開瀏覽器)。 |
+| 同教室學生電腦只開瀏覽器，連教師機用導師 | **區網模式**：教師機設定完成後雙擊 `start-tutor-lan.cmd`，學生開視窗顯示的 `http://教師機IP:8612/editor.html`（私人網段或確認過的學校網段位址皆可）；金鑰只留教師機。步驟、防火牆、手機實測與剩餘風險見 [教師快速設定第 6 節](TEACHER-SETUP.md#6-區網模式學生電腦只開瀏覽器)。 |
 
 ## 本機 AI 解題導師與教師記錄
 
