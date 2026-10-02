@@ -4,6 +4,18 @@
 
 ## 1. 下載與啟動
 
+### 最快方式：下載免建置版（建議）
+
+1. 先安裝 Node.js 22 以上（[https://nodejs.org/](https://nodejs.org/)，選 LTS 版，安裝時一路預設）。
+2. 到 [Releases 頁面](https://github.com/bai-collab/osep-judge/releases/latest) 下載 `osep-judge-local-tutor.zip`，解壓縮。
+3. 進入 `osep-judge` 資料夾，雙擊 `start-tutor.cmd`，再接著做下方「2. 教師先填 API 設定」。
+
+這個下載包已含建置好的網頁，不需要 Git、`npm.cmd ci` 或 `npm.cmd run build`；也不含金鑰、教師密碼與學生紀錄，每台電腦需由教師各自設定。
+
+**注意**：GitHub 頁面上綠色「Code → Download ZIP」下載的是原始碼，沒有建置好的網頁；直接雙擊 `start-tutor.cmd` 會出現「找不到已建置的 build\editor.html」。請改用上面的下載包，或依下一節自行建置。
+
+### 進階方式：從原始碼建置
+
 請使用已安裝的 Node.js 22 或更新版本（本機驗證版本 22.22.3）與 Git。請在專案資料夾開啟終端機（輸入文字指令的視窗）。Windows 啟動腳本會檢查至少22版；其他系統請先用 `node --version` 確認。本工具不會自動安裝；以下套件指令由教師自行執行。
 
 ```powershell
@@ -95,7 +107,8 @@ Google Apps Script（GAS）是接收本機紀錄、寫入你試算表的小程�
 
 ## 5. 複製到學生電腦與保護帳密
 
-- 準備專案副本時保留建置好的 `build/`、`scripts/`、`src/lib/`、根目錄 `package.json`、`start-tutor.cmd` 與授權文件；**整個排除 `local-data/`**。不要只挑幾個腳本複製，資料夾結構及 `package.json` 都會影響模組載入。學生電腦也要安裝 Node.js 22 以上：請到官方下載處 [https://nodejs.org/](https://nodejs.org/)，選 LTS 版，安裝時一路使用預設選項；安裝後開啟終端機執行 `node --version` 確認版本。本次尚未在實體學生電腦測試。
+- 最簡單的做法：每台學生電腦直接下載同一個 [免建置版下載包](https://github.com/bai-collab/osep-judge/releases/latest)，不用從教師電腦複製。
+- 若要自行複製，準備專案副本時保留建置好的 `build/`、`scripts/`、`src/lib/`、根目錄 `package.json`、`start-tutor.cmd` 與授權文件；**整個排除 `local-data/`**。不要只挑幾個腳本複製，資料夾結構及 `package.json` 都會影響模組載入。學生電腦也要安裝 Node.js 22 以上：請到官方下載處 [https://nodejs.org/](https://nodejs.org/)，選 LTS 版，安裝時一路使用預設選項；安裝後開啟終端機執行 `node --version` 確認版本。本次尚未在實體學生電腦測試。
 - 每台由教師先開教師頁、設定自己的密碼與服務金鑰，再登出交給學生。每台學生使用不同代號；教師可在有同一 GAS 設定的電腦同步讀回全表。
 - `local-data/teacher-settings.json` 含本機明文服務金鑰與教師密碼雜湊（密碼經單向轉換後保存，不存原文）；`events.jsonl` 含學生紀錄。它們已被 Git 忽略，但**ZIP／整個資料夾複製仍可能帶走**，必須自行排除。
 - 一般學生頁不會取得金鑰；能讀取本機檔案或控制後端的人仍能取出。教師登入後同一瀏覽器可操作一小時，交接前務必登出。
