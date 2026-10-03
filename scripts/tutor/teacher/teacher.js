@@ -20,6 +20,8 @@ const filtered = () => records.filter(r => (!$('student').value || r.studentId =
     (!$('record-type').value || r.type === $('record-type').value) &&
     (!$('date-from').value || dateKey(r.timestamp) >= $('date-from').value) &&
     (!$('date-to').value || dateKey(r.timestamp) <= $('date-to').value))
+    // The record store preserves save order; stable sort keeps newer saves first when timestamps tie.
+    .reverse()
     .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 /** Refresh select options while preserving a still-valid selection.
  * @param {string} id Select element ID.
