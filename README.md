@@ -379,3 +379,11 @@ Here's what will happen in the project state machine:
 ## Donate
 We provide [Scratch](https://scratch.mit.edu) free of charge, and want to keep it that way! Please consider making a [donation](https://www.scratchfoundation.org/donate) to support our continued engineering, design, community, and resource development efforts. Donations of any size are appreciated. Thank you!
 -->
+
+## 教師工作台
+
+本機教師頁已改為暖色側欄工作區：搜尋學生、依題目／類型／日期查詢作答，閱讀成績、積木快照與導師對話；集中設定 API 金鑰、GAS 正式網址與 RECORD_TOKEN。可針對選取的紀錄向教師 AI 分析助手提問，分開呈現觀察、推測、建議與資料限制，並點回紀錄依據。
+
+執行 `start-tutor.cmd`，開啟服務顯示的 `/teacher.html`。已開著舊服務時先 Ctrl+C 停止再重新啟動。預設本機摘要不呼叫 AI；選 AI 分析並送出才會傳送所選資料與使用模型。教師工作台只能在教師機本機使用，GitHub Pages 仍是學生靜態編輯器，無法提供教師後端。
+
+詳細操作及資料邊界見 [教師設定說明](TEACHER-SETUP.md#教師工作台查紀錄與-ai-分析)。金鑰與學生資料留在本機，不包含於 GitHub。

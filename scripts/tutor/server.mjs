@@ -10,6 +10,7 @@ import {createRecordStore, isRecordLimitError, RECORD_LIMIT} from './record-stor
 import {createSheetClient} from './sheet-client.mjs';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
 import {createTeacherSettings, sheetScope} from './teacher-settings.mjs';
+import {selectAnalysisRecords, analysisContext, mockAnalysis, requestAnalysis} from './teacher-analysis.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const MAX_BODY = 800000;
@@ -104,7 +105,7 @@ export function createTutorServer({buildDir = path.join(root, 'build'), fetchImp
     const entryBucket = createWindowCounter(limits.entryPerIp, limits.windowMs);
     const liveIpBucket = createWindowCounter(limits.livePerIp, limits.windowMs);
     const liveGlobalBucket = createWindowCounter(limits.liveGlobal, limits.windowMs);
-    let activeLive = 0;
+    let activeLive = 0, activeAnalysis = false;
     const takeEntry = req => {
         if (!limitsOn) return true;
         const key = clientKey(req);
@@ -217,6 +218,52 @@ export function createTutorServer({buildDir = path.join(root, 'build'), fetchImp
             failedLogins = 0;
             issueSession(res);
             return json(res, 200, {ok: true});
+        }
+        if (url.pathname === '/api/teacher/analyze') {
+            if (req.method !== 'POST') return json(res, 405, {error: '請用教師分析頁送出。'});
+            if (req.headers.origin !== `http://${host}` ||
+                !/^application\/json(?:;|$)/i.test(req.headers['content-type'] || '')) {
+                return json(res, 403, {error: '只接受本機教師頁。'});
+            }
+            if (!authorizedTeacher(req)) return json(res, 401, {error: '請先登入教師頁。'});
+            if (!recordStore || !teacherSettings) return json(res, 503, {error: '教師分析服務尚未啟用。'});
+            if (updatingSettings || activeAnalysis) return json(res, 409, {error: '分析或設定處理中，請稍後再試。'});
+            activeAnalysis = true;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            const disconnect = () => {if (!res.writableEnded) controller.abort();};
+            res.on('close', disconnect);
+            try {
+                const body = await readBody(req);
+                if (!body || !['mock', 'live'].includes(body.mode) || typeof body.question !== 'string' ||
+                    !body.question.trim() || body.question.length > 1500 ||
+                    (body.history != null && (!Array.isArray(body.history) || body.history.length > 6 ||
+                    body.history.some(turn => !turn || !['user', 'assistant'].includes(turn.role) ||
+                        typeof turn.text !== 'string' || turn.text.length > 6000)))) {
+                    return json(res, 400, {error: '請用1500字內提問，並選取有效紀錄。'});
+                }
+                const records = selectAnalysisRecords(await recordStore.list(), body.recordIds);
+                const context = analysisContext(records);
+                if (includesSecret(body) || includesSecret(context)) return json(res, 400, {error: '請勿在分析內容放入連線密鑰。'});
+                if (!authorizedTeacher(req)) return json(res, 401, {error: '教師登入已失效。'});
+                const apiKey = teacherSettings.secrets().aiKey;
+                if (body.mode === 'live' && !apiKey) return json(res, 400, {error: '請先到連線設定保存 AI 金鑰。'});
+                const result = body.mode === 'mock' ? mockAnalysis(records) : await requestAnalysis({apiKey, context,
+                    question: body.question.trim(), history: body.history || [], signal: controller.signal, fetchImpl});
+                if (controller.signal.aborted) return json(res, 504, {error: messages.TIMEOUT, code: 'TIMEOUT'});
+                if (!authorizedTeacher(req)) return json(res, 401, {error: '教師登入已失效。'});
+                if (includesSecret(result)) return json(res, 502, {error: messages.INVALID_MODEL_OUTPUT, code: 'INVALID_MODEL_OUTPUT'});
+                return json(res, 200, {result, source: body.mode === 'mock' ? 'mock' : 'nmking', model: body.mode === 'live' ? MODEL : null,
+                    selection: {recordIds: records.map(r => r.id), count: context.count, from: context.from, to: context.to, partial: context.partial}});
+            } catch (error) {
+                if (['INVALID_SELECTION', 'CONTEXT_TOO_LARGE', 'BODY_TOO_LARGE'].includes(error.code || error.message) || error instanceof SyntaxError) {
+                    return json(res, 400, {error: '紀錄選取無效或資料過大，請縮小範圍後再試。'});
+                }
+                const code = controller.signal.aborted ? 'TIMEOUT' : Object.hasOwn(messages, error.code || '') ? error.code : 'INTERNAL_ERROR';
+                return json(res, code === 'TIMEOUT' ? 504 : 502, {error: messages[code], code});
+            } finally {
+                clearTimeout(timer); res.off('close', disconnect); activeAnalysis = false;
+            }
         }
         if (url.pathname === '/api/records' || url.pathname === '/api/records/sync') {
             if (req.method === 'POST' && url.pathname === '/api/records' && !takeEntry(req)) {

@@ -26,7 +26,7 @@
     "test:smoke": "jest --runInBand test[\\\\/]smoke",
     "watch": "webpack --colors --watch",
     "tutor:serve": "node scripts/tutor/server.mjs",
-    "tutor:test": "node --test scripts/tutor/tutor.test.mjs scripts/tutor/tutor-connection.test.mjs scripts/tutor/menu-bar-controls.test.mjs scripts/tutor/floating-tutor.test.mjs scripts/tutor/tutor-highlight.test.mjs scripts/tutor/learning-records.test.mjs scripts/tutor/grading-records.test.mjs scripts/tutor/teacher-settings.test.mjs scripts/tutor/lan-mode.test.mjs"
+    "tutor:test": "node --test scripts/tutor/tutor.test.mjs scripts/tutor/tutor-connection.test.mjs scripts/tutor/menu-bar-controls.test.mjs scripts/tutor/floating-tutor.test.mjs scripts/tutor/tutor-highlight.test.mjs scripts/tutor/learning-records.test.mjs scripts/tutor/grading-records.test.mjs scripts/tutor/teacher-settings.test.mjs scripts/tutor/lan-mode.test.mjs scripts/tutor/teacher-analysis.test.mjs"
   },
   "config": {
     "commitizen": {
